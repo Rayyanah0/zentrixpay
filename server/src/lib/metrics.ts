@@ -48,3 +48,17 @@ export const cacheMisses = new Counter({
   labelNames: ["cache"] as const,
   registers: [metricsRegistry],
 });
+
+// API-call records awaiting recovery after a failed insert (#134). Non-zero
+// means usage stats are temporarily behind; alert if it stays non-zero.
+export const apiCallRecordsPending = new Gauge({
+  name: "zentrixpay_api_call_records_pending",
+  help: "API-call records spooled after a failed database write and awaiting recovery",
+  registers: [metricsRegistry],
+});
+
+export const apiCallRecordsRecovered = new Counter({
+  name: "zentrixpay_api_call_records_recovered_total",
+  help: "API-call records written to the database by the recovery worker",
+  registers: [metricsRegistry],
+});

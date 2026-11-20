@@ -48,6 +48,7 @@ import {
   type ApiRow,
 } from "../services/apiService.js";
 import { getApiCreditBalance, purchaseApiCredits } from "../services/apiCredits.js";
+import { statsPagination } from "../services/apiStatsQuery.js";
 import { apiCreditPurchaseReference } from "../lib/apiCreditSignature.js";
 import { deliverChargedCallWebhook } from "../services/webhookService.js";
 import {
@@ -245,23 +246,32 @@ router.post("/apis/:id/verify-ownership", apiKeyAuth, requestSignatureAuth, asyn
   }
 });
 
-// GET /apis/:id/stats — call counts, revenue and recent calls (owner; archived APIs included)
+// GET /apis/:id/stats?from=&to=&limit=&offset= — call counts, revenue and paged call
+// history for one window (owner; archived APIs included). `from` is inclusive and
+// `to` exclusive; the same window applies to the totals and to recentCalls (#143).
 router.get("/apis/:id/stats", apiKeyAuth, async (req, res) => {
   const query = apiStatsQuerySchema.safeParse(req.query);
   if (!query.success) {
     res.status(400).json({ error: query.error.format() });
     return;
   }
+  const { from, to, limit, offset } = query.data;
   try {
     const api = await getOwnedApi(req.params.id as string, req.publisher!.id, {
       includeArchived: true,
     });
     const [totals, recentCalls] = await Promise.all([
-      getApiStats(api.id),
-      listRecentCalls(api.id, 50),
-      q.interval ? getApiTimeSeries(api.id, q) : undefined,
+      getApiStats(api.id, { from, to }),
+      listRecentCalls(api.id, { from, to, limit, offset }),
     ]);
-    res.json({ apiId: api.id, archivedAt: api.archivedAt, ...totals, recentCalls });
+    res.json({
+      apiId: api.id,
+      archivedAt: api.archivedAt,
+      range: { from: from?.toISOString() ?? null, to: to?.toISOString() ?? null },
+      ...totals,
+      recentCalls,
+      pagination: statsPagination(limit, offset, recentCalls.length, totals.calls),
+    });
   } catch (err) {
     sendServiceError(res, err);
   }
@@ -410,7 +420,7 @@ router.get("/:id/stats", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "API not found" });
     }
     const [totals, recentCalls] = await Promise.all([
-      getApiStats(api.id, since),
+      getApiStats(api.id, { since }),
       listRecentCalls(api.id, 50),
     ]);
     return res.json({ apiId: api.id, ...totals, recentCalls });
@@ -474,6 +484,8 @@ async function proxyHandler(req: Request, res: Response) {
     const callId = randomUUID();
     recordApiCall({
       callId,
+      apiId: api.id,
+      charged,
       payerAddress: (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement),
       amount: (res.locals.apiCallPrice as string | undefined) ?? api.price,
       method: req.method,
@@ -484,9 +496,10 @@ async function proxyHandler(req: Request, res: Response) {
       responseStatus: res.statusCode,
       durationMs: Date.now() - started,
     }).catch((err) =>
+      // Only reached when the recovery spool itself could not be written (#134).
       getLogger().error(
-        { event: "api_call_record_failed", apiId: api.id, err },
-        "failed to record API call",
+        { event: "api_call_record_lost", apiId: api.id, callId, err },
+        "failed to record or spool API call",
       ),
     );
   });

@@ -737,6 +737,16 @@ export const ZENTRIXPAY_CALL_OUTPUT_SCHEMA = {
     txHash: { type: ["string", "null"] },
     contentType: { type: ["string", "null"] },
     /**
+     * Allowlisted upstream response headers (lower-case names), e.g. `link`,
+     * `retry-after`, `etag`, rate-limit counters. See SAFE_RESPONSE_HEADERS in
+     * responseHeaders.ts (#146). Cookies, hop-by-hop and payment headers are
+     * never included.
+     */
+    headers: {
+      type: "object",
+      additionalProperties: { type: "string" },
+    },
+    /**
      * Text responses: a string (possibly truncated).
      * Binary responses: an object with encoding, sizeBytes and base64 data (#101).
      */
@@ -755,7 +765,17 @@ export const ZENTRIXPAY_CALL_OUTPUT_SCHEMA = {
       ],
     },
   },
-  required: ["api", "request", "status", "charged", "amount", "txHash", "contentType", "body"],
+  required: [
+    "api",
+    "request",
+    "status",
+    "charged",
+    "amount",
+    "txHash",
+    "contentType",
+    "headers",
+    "body",
+  ],
 } as const;
 
 /** Tools that must stay text-only (no schema, no structuredContent). */

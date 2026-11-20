@@ -8,6 +8,18 @@ import { validateUpstreamUrl } from "../lib/upstreamGuard.js";
 import { sendUpstream } from "../lib/upstreamClient.js";
 import { createTtlCache } from "../lib/ttlCache.js";
 import type { apiCatalogSortValues } from "../schemas/requests.js";
+import { statsWhere, type RecentCallsOptions, type StatsRange } from "./apiStatsQuery.js";
+import {
+  FileApiCallRecordOutbox,
+  createApiCallRecorder,
+  postgresApiCallRecordStore,
+  type ApiCallRecord,
+  type ApiCallRecorder,
+} from "./apiCallRecorder.js";
+import { apiCallRecordsPending } from "../lib/metrics.js";
+import { logger as rootLogger } from "../lib/logger.js";
+
+export { statsWhere, type RecentCallsOptions, type StatsRange } from "./apiStatsQuery.js";
 
 export type ApiRow = typeof apis.$inferSelect;
 
@@ -655,7 +667,7 @@ export async function getPublisherAnalytics(publisherId: string) {
   };
 }
 
-export async function getApiStats(apiId: string) {
+export async function getApiStats(apiId: string, range: StatsRange = {}) {
   const [totals] = await db
     .select({
       calls: sql<number>`count(*)::int`,
@@ -668,17 +680,23 @@ export async function getApiStats(apiId: string) {
       netRevenue: sql<string>`(coalesce(sum(${apiCalls.amount}::numeric) filter (where ${apiCalls.charged}), 0) - coalesce(sum(${apiCalls.refundAmount}::numeric) filter (where ${apiCalls.refundStatus} = 'refunded'), 0))::text`,
     })
     .from(apiCalls)
-    .where(eq(apiCalls.apiId, apiId));
+    .where(statsWhere(apiId, range));
   return { ...totals, currency: "USDC" };
 }
 
-export async function listRecentCalls(apiId: string, limit: number) {
+/**
+ * Newest-first call history for one API. Accepts a bare limit (legacy) or a
+ * range + pagination object using the same window as getApiStats.
+ */
+export async function listRecentCalls(apiId: string, opts: number | RecentCallsOptions) {
+  const options: RecentCallsOptions = typeof opts === "number" ? { limit: opts } : opts;
   return db
     .select()
     .from(apiCalls)
-    .where(eq(apiCalls.apiId, apiId))
-    .orderBy(desc(apiCalls.createdAt))
-    .limit(limit);
+    .where(statsWhere(apiId, options))
+    .orderBy(desc(apiCalls.createdAt), desc(apiCalls.id))
+    .limit(options.limit)
+    .offset(options.offset ?? 0);
 }
 
 /** One data point in a time-series response: calls and revenue for a single calendar day. */
@@ -725,4 +743,32 @@ export async function getApiTimeSeries(
     result.push({ date: dateStr, calls: row?.calls ?? 0, revenue: row?.revenue ?? "0" });
   }
   return result;
+}
+// ── API-call records (#134) ─────────────────────────────────────────────────
+
+let callRecorder: ApiCallRecorder | null = null;
+
+/** Shared recorder: database first, durable outbox on failure. */
+export function getApiCallRecorder(): ApiCallRecorder {
+  callRecorder ??= createApiCallRecorder({
+    store: postgresApiCallRecordStore(db as never),
+    outbox: new FileApiCallRecordOutbox(config.API_CALL_OUTBOX_DIR),
+    logger: rootLogger,
+    onPending: (pending) => apiCallRecordsPending.set(pending),
+  });
+  return callRecorder;
+}
+
+/**
+ * Record one proxied call. A failed insert is spooled and retried by the
+ * recovery worker, so the row is not lost; this rejects only when the spool
+ * itself cannot be written.
+ */
+export async function recordApiCall(
+  call: Omit<ApiCallRecord, "createdAt"> & { createdAt?: string },
+): Promise<void> {
+  await getApiCallRecorder().record({
+    ...call,
+    createdAt: call.createdAt ?? new Date().toISOString(),
+  });
 }

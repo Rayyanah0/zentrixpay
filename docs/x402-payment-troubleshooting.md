@@ -109,7 +109,7 @@ curl -i https://your-server/api/<api-id>/<path>
 
 **Fix:**
 
-1. Check server readiness: `GET /health/ready` — confirms DB and Soroban RPC are up.
+1. Check server readiness: `GET /health/ready` — confirms DB, Soroban RPC and the x402 payment facilitator are up.
 2. Retry after a short delay; auth entries expire quickly so you may need a fresh 402 cycle.
 3. Inspect the facilitator response in server logs.
 4. Override `FACILITATOR_URL` only if you operate a compatible facilitator.
@@ -170,5 +170,5 @@ curl "https://your-server/payers/<G-address>/calls?limit=10"
 ## Still stuck?
 
 1. Reproduce with a minimal x402 client (`pnpm --filter server e2e`).
-2. Check `/health/ready` for dependency failures. Failed checks report a stable code (`database_unavailable`, `soroban_rpc_unavailable`); the underlying error is only in server logs under `event: "readiness_probe_failed"`.
+2. Check `/health/ready` for dependency failures. Failed checks report a stable code (`database_unavailable`, `soroban_rpc_unavailable`, `payment_facilitator_unavailable`, `payment_facilitator_timeout`); the underlying error is only in server logs under `event: "readiness_probe_failed"`.
 3. Open a GitHub issue with: network, endpoint, HTTP status, whether browser or agent, and the payer G-address (never post secret keys).

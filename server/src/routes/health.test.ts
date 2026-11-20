@@ -13,8 +13,17 @@ const { mockExecute, mockGetHealth, mockWarn } = vi.hoisted(() => ({
 
 vi.mock("../db/client.js", () => ({ db: { execute: mockExecute } }));
 vi.mock("../config.js", () => ({
-  config: { SOROBAN_RPC_URL: "https://rpc-internal.example:8000/soroban" },
+  config: {
+    SOROBAN_RPC_URL: "https://rpc-internal.example:8000/soroban",
+    FACILITATOR_URL: "https://facilitator.internal.example/x402",
+    FACILITATOR_HEALTH_TIMEOUT_MS: 100,
+    READINESS_REQUIRE_FACILITATOR: true,
+  },
 }));
+
+// The facilitator probe uses global fetch; default it to healthy.
+const mockFetch = vi.fn();
+vi.stubGlobal("fetch", mockFetch);
 vi.mock("@stellar/stellar-sdk", () => ({
   rpc: {
     Server: class {
@@ -44,6 +53,8 @@ describe("GET /health/ready — sanitized errors (#136)", () => {
     mockExecute.mockReset();
     mockGetHealth.mockReset();
     mockWarn.mockReset();
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue(new Response(JSON.stringify({ kinds: [] }), { status: 200 }));
   });
 
   it("reports ok with no error fields when dependencies are healthy", async () => {
@@ -128,5 +139,94 @@ describe("GET /health/ready — sanitized errors (#136)", () => {
 
     expect(res.body.checks.database.error).toBe("database_unavailable");
     expect(res.text).not.toContain("password authentication");
+  });
+});
+
+describe("GET /health/ready — payment facilitator (#133)", () => {
+  beforeEach(() => {
+    mockExecute.mockReset().mockResolvedValue([]);
+    mockGetHealth.mockReset().mockResolvedValue({
+      latestLedger: 10,
+      oldestLedger: 1,
+      ledgerRetentionWindow: 9,
+    });
+    mockWarn.mockReset();
+    mockFetch.mockReset();
+  });
+
+  it("is ready when the facilitator answers /supported", async () => {
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ kinds: [{ scheme: "exact" }, { scheme: "exact" }] }), {
+        status: 200,
+      }),
+    );
+
+    const res = await request(app()).get("/health/ready");
+
+    expect(res.status).toBe(200);
+    expect(res.body.checks.facilitator).toMatchObject({
+      status: "ok",
+      required: true,
+      details: { supportedKinds: 2 },
+    });
+    // Read-only: only GET /supported, never verify or settle.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://facilitator.internal.example/x402/supported");
+    expect(init.method).toBe("GET");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("is not ready when the facilitator is unhealthy", async () => {
+    mockFetch.mockResolvedValue(new Response("down", { status: 502 }));
+
+    const res = await request(app()).get("/health/ready");
+
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe("error");
+    expect(res.body.checks.facilitator).toMatchObject({
+      status: "error",
+      error: "payment_facilitator_unavailable",
+    });
+    expect(res.body.checks.database.status).toBe("ok");
+  });
+
+  it("is not ready when the facilitator check times out", async () => {
+    mockFetch.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          );
+        }),
+    );
+
+    const started = Date.now();
+    const res = await request(app()).get("/health/ready");
+
+    expect(res.status).toBe(503);
+    expect(res.body.checks.facilitator).toMatchObject({
+      status: "error",
+      error: "payment_facilitator_timeout",
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("does not leak the facilitator URL in errors", async () => {
+    mockFetch.mockRejectedValue(new Error("getaddrinfo ENOTFOUND facilitator.internal.example"));
+
+    const res = await request(app()).get("/health/ready");
+
+    expect(res.text).not.toContain("facilitator.internal.example");
+  });
+
+  it("keeps liveness independent of the facilitator", async () => {
+    mockFetch.mockRejectedValue(new Error("down"));
+
+    const res = await request(app()).get("/health");
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("ok");
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });

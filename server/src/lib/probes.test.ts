@@ -24,3 +24,33 @@ describe("overallReadinessStatus", () => {
     ).toBe("error");
   });
 });
+
+describe("overallReadinessStatus with optional checks (#133)", () => {
+  it("ignores failing checks that are not required", () => {
+    expect(
+      overallReadinessStatus({
+        database: { status: "ok", latencyMs: 1 },
+        facilitator: {
+          status: "error",
+          latencyMs: 2,
+          required: false,
+          error: "payment_facilitator_unavailable",
+        },
+      }),
+    ).toBe("ok");
+  });
+
+  it("fails when a required facilitator check fails", () => {
+    expect(
+      overallReadinessStatus({
+        database: { status: "ok", latencyMs: 1 },
+        facilitator: {
+          status: "error",
+          latencyMs: 2,
+          required: true,
+          error: "payment_facilitator_unavailable",
+        },
+      }),
+    ).toBe("error");
+  });
+});

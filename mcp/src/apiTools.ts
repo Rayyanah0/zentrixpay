@@ -9,6 +9,7 @@
 
 import { assertWithinSessionSpendLimit, recordSessionSpend } from "./paymentCeiling.js";
 import { ZENTRIXPAY_CALL_OUTPUT_SCHEMA } from "./outputSchemas.js";
+import { pickSafeResponseHeaders } from "./responseHeaders.js";
 import type { ToolDefinition } from "./tools.js";
 import type { ApiResponse } from "./apiResponse.js";
 
@@ -149,7 +150,7 @@ export const API_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "zentrixpay_call",
     description:
-      "Call a pay-per-call API, paying its per-call price in USDC via x402 from the agent wallet. The caller is not charged when the API returns an error (status >= 400) or times out. Calls above ZENTRIXPAY_MAX_AUTO_PAY_USDC need maxAutoPayUsdc.",
+      "Call a pay-per-call API, paying its per-call price in USDC via x402 from the agent wallet. The caller is not charged when the API returns an error (status >= 400) or times out. Calls above ZENTRIXPAY_MAX_AUTO_PAY_USDC need maxAutoPayUsdc. The result includes an allowlisted set of safe response headers (pagination, retry, caching, rate limits); cookies, hop-by-hop and payment headers are never returned.",
     inputSchema: {
       type: "object",
       properties: {
@@ -279,10 +280,35 @@ export const API_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "zentrixpay_api_stats",
     description:
-      "Usage and earnings for one of your APIs: total and charged calls, USDC revenue, unique payers, average latency and the 50 most recent calls.",
+      "Usage and earnings for one of your APIs: total and charged calls, USDC revenue, unique payers, average latency and a page of recent calls. Pass from/to to limit totals and history to the same date range (from inclusive, to exclusive; max 366 days) and limit/offset to page through calls.",
     inputSchema: {
       type: "object",
-      properties: { apiId: API_ID },
+      properties: {
+        apiId: API_ID,
+        from: {
+          type: "string",
+          description: "Start of the range, inclusive. ISO-8601 date or date-time.",
+          examples: ["2026-01-01", "2026-01-01T00:00:00Z"],
+        },
+        to: {
+          type: "string",
+          description: "End of the range, exclusive. ISO-8601 date or date-time.",
+          examples: ["2026-02-01"],
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+          default: 50,
+          description: "Calls per page (1-100).",
+        },
+        offset: {
+          type: "integer",
+          minimum: 0,
+          default: 0,
+          description: "Calls to skip, for paging through history.",
+        },
+      },
       required: ["apiId"],
     },
     annotations: {
@@ -568,6 +594,7 @@ export function createApiToolHandler(
       amount: charged ? `${api.price} USDC` : "0 USDC (not charged: the call failed)",
       txHash,
       contentType,
+      headers: pickSafeResponseHeaders(res.headers),
       body: bodyPayload,
     });
   }
@@ -663,9 +690,27 @@ export function createApiToolHandler(
   async function apiStats(args: Record<string, unknown>): Promise<string> {
     const apiKey = deps.requireApiKey();
     const id = str(args, "apiId", true)!;
-    const res = await deps.jsonFetch(`${base()}/apis/${encodeURIComponent(id)}/stats`, {
+    const url = new URL(`${base()}/apis/${encodeURIComponent(id)}/stats`);
+    // Optional window and paging (#143). Validation happens server-side so the
+    // tool and the dashboard share one set of rules.
+    for (const key of ["from", "to"] as const) {
+      const value = str(args, key);
+      if (value) url.searchParams.set(key, value);
+    }
+    for (const key of ["limit", "offset"] as const) {
+      const value = args[key];
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+        throw new Error(`${key} must be a non-negative integer`);
+      }
+      url.searchParams.set(key, String(value));
+    }
+    const res = await deps.jsonFetch(url.toString(), {
       headers: { "x-api-key": apiKey },
     });
+    if (res.status === 400) {
+      throw new Error(`Invalid stats query: ${JSON.stringify(res.data)}`);
+    }
     if (!res.ok) throw new Error(`Failed to get API stats (HTTP ${res.status})`);
     return json(res.data);
   }

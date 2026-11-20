@@ -14,6 +14,7 @@ import {
 import { useAsync } from "../hooks/useAsync.js";
 import type { WalletState } from "../hooks/useWalletConnection.js";
 import { ErrorBanner } from "./ErrorBanner.js";
+import { STATS_PAGE_SIZE, buildStatsRange } from "../lib/statsRange.js";
 import {
   clearProviderKey,
   isProviderKeyRemembered,
@@ -547,7 +548,7 @@ function OwnershipInstructions({
 
 // ── Managing one API ─────────────────────────────────────────────────────────
 
-function StatsPanel({ stats }: { stats: ApiStats }) {
+function StatsView({ stats }: { stats: ApiStats }) {
   const tiles = [
     ["Revenue", `${stats.revenue} USDC`],
     ["Paid calls", String(stats.chargedCalls)],
@@ -556,7 +557,7 @@ function StatsPanel({ stats }: { stats: ApiStats }) {
     ["Avg latency", `${stats.avgDurationMs} ms`],
   ];
   return (
-    <div className="mt-4">
+    <div>
       <dl className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
         {tiles.map(([label, value]) => (
           <div key={label} className="rounded-lg bg-gray-50 p-2 dark:bg-gray-900">
@@ -595,6 +596,139 @@ function StatsPanel({ stats }: { stats: ApiStats }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Stats with a date range and paged call history (#143). The same window is
+ * sent for the totals and the call list, so they always agree.
+ */
+export function StatsPanel({
+  apiKey,
+  apiId,
+  initial,
+}: {
+  apiKey: string;
+  apiId: string;
+  initial: ApiStats;
+}) {
+  const [stats, setStats] = useState(initial);
+  const [fromDay, setFromDay] = useState("");
+  const [toDay, setToDay] = useState("");
+  const [applied, setApplied] = useState<{ from?: string; to?: string }>({});
+  const [offset, setOffset] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load(range: { from?: string; to?: string }, nextOffset: number) {
+    setBusy(true);
+    setError(null);
+    try {
+      setStats(
+        await fetchApiStats(apiKey, apiId, {
+          ...range,
+          limit: STATS_PAGE_SIZE,
+          offset: nextOffset,
+        }),
+      );
+      setApplied(range);
+      setOffset(nextOffset);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function apply(e: React.FormEvent) {
+    e.preventDefault();
+    const range = buildStatsRange(fromDay, toDay);
+    if (!range.ok) {
+      setError(range.error);
+      return;
+    }
+    void load({ from: range.from, to: range.to }, 0);
+  }
+
+  const total = stats.pagination?.total ?? stats.calls;
+  const hasMore = stats.pagination?.hasMore ?? false;
+  const shown = stats.recentCalls.length;
+
+  return (
+    <div className="mt-4">
+      <form
+        onSubmit={apply}
+        className="mb-3 flex flex-wrap items-end gap-2"
+        aria-label="Stats date range"
+      >
+        <label className="text-xs text-gray-500 dark:text-gray-400">
+          From
+          <input
+            type="date"
+            className={inputClass}
+            value={fromDay}
+            onChange={(e) => setFromDay(e.target.value)}
+          />
+        </label>
+        <label className="text-xs text-gray-500 dark:text-gray-400">
+          To
+          <input
+            type="date"
+            className={inputClass}
+            value={toDay}
+            onChange={(e) => setToDay(e.target.value)}
+          />
+        </label>
+        <button type="submit" className={secondaryButton} disabled={busy}>
+          {busy ? "Loading…" : "Apply"}
+        </button>
+        {(applied.from || applied.to) && (
+          <button
+            type="button"
+            className={secondaryButton}
+            disabled={busy}
+            onClick={() => {
+              setFromDay("");
+              setToDay("");
+              void load({}, 0);
+            }}
+          >
+            All time
+          </button>
+        )}
+      </form>
+      {error && (
+        <p role="alert" className="mb-2 text-sm text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      )}
+      <StatsView stats={stats} />
+      {total > 0 && (
+        <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+          <span>
+            {shown === 0
+              ? `No calls on this page (of ${total})`
+              : `Calls ${offset + 1}–${offset + shown} of ${total}`}
+          </span>
+          <button
+            type="button"
+            className={secondaryButton}
+            disabled={busy || offset === 0}
+            onClick={() => void load(applied, Math.max(0, offset - STATS_PAGE_SIZE))}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className={secondaryButton}
+            disabled={busy || !hasMore}
+            onClick={() => void load(applied, offset + STATS_PAGE_SIZE)}
+          >
+            Next
+          </button>
         </div>
       )}
     </div>
@@ -729,7 +863,7 @@ function ApiCard({
             stats
               ? setStats(null)
               : run("Stats", async () => {
-                  setStats(await fetchApiStats(apiKey, api.id));
+                  setStats(await fetchApiStats(apiKey, api.id, { limit: STATS_PAGE_SIZE }));
                 })
           }
         >
@@ -742,7 +876,7 @@ function ApiCard({
           {error}
         </p>
       )}
-      {stats && <StatsPanel stats={stats} />}
+      {stats && <StatsPanel apiKey={apiKey} apiId={api.id} initial={stats} />}
     </li>
   );
 }

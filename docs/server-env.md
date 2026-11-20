@@ -13,6 +13,8 @@ and fill in each value.
 | `STELLAR_NETWORK`                     | no       | `testnet`                          | Deployment network selector (`testnet` or `mainnet`). Fills defaults for RPC, USDC, and x402 network when individual vars are omitted                           |
 | `NETWORK`                             | no       | from `STELLAR_NETWORK`             | x402 network id (`stellar:testnet` or `stellar:pubnet`; `stellar:mainnet` is accepted as an alias for pubnet)                                                   |
 | `FACILITATOR_URL`                     | no       | `https://www.x402.org/facilitator` | x402 facilitator endpoint for payment verification/settlement                                                                                                   |
+| `FACILITATOR_HEALTH_TIMEOUT_MS`       | no       | `2000`                             | Timeout for the read-only facilitator check in `/health/ready` (`GET /supported`; never starts a payment)                                                       |
+| `READINESS_REQUIRE_FACILITATOR`       | no       | `true`                             | When `true`, an unavailable facilitator makes `/health/ready` return 503; `false` reports it without failing readiness                                          |
 | `USDC_CONTRACT_ID`                    | no       | from `STELLAR_NETWORK`             | Soroban USDC Stellar Asset Contract for the selected network                                                                                                    |
 | `SOROBAN_RPC_URL`                     | no       | from `STELLAR_NETWORK`             | Soroban RPC endpoint for on-chain registry reads/writes                                                                                                         |
 | `DATABASE_URL`                        | **yes**  | —                                  | Postgres connection string                                                                                                                                      |
@@ -31,6 +33,8 @@ and fill in each value.
 | `API_CALL_RETENTION_DAYS`             | no       | `180`                              | Days an API call record is kept before deletion. `0` keeps records forever; otherwise must be at least `90`. See [api-call-retention.md](api-call-retention.md) |
 | `API_CALL_RETENTION_INTERVAL_MS`      | no       | `3600000`                          | How often expired API call records are purged (`0` disables the job)                                                                                            |
 | `API_CALL_RETENTION_BATCH_SIZE`       | no       | `1000`                             | Max API call records deleted per statement (1–10000)                                                                                                            |
+| `API_CALL_OUTBOX_DIR`                 | no       | `./data/api-call-outbox`           | Spool for API call records whose database write failed; use a persistent volume. See [api-call-recovery.md](api-call-recovery.md)                               |
+| `API_CALL_RECOVERY_INTERVAL_MS`       | no       | `30000`                            | How often spooled API call records are retried (`0` disables the worker)                                                                                        |
 
 ## API gateway
 

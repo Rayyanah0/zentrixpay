@@ -80,6 +80,19 @@ export interface ApiStats {
   netRevenue: string;
   currency: "USDC";
   recentCalls: ApiCall[];
+  /** Window the totals and recentCalls cover (#143); null bounds are open. */
+  range?: { from: string | null; to: string | null };
+  pagination?: { limit: number; offset: number; total: number; hasMore: boolean };
+}
+
+/** Optional window and paging for GET /apis/:id/stats (#143). */
+export interface ApiStatsQuery {
+  /** Inclusive ISO-8601 date or date-time. */
+  from?: string;
+  /** Exclusive ISO-8601 date or date-time. */
+  to?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface ApiInput {
@@ -209,8 +222,20 @@ export async function archiveApi(apiKey: string, id: string): Promise<void> {
   await readJson(await signedPublisherFetch(absolute(`/apis/${id}`), apiKey, { method: "DELETE" }));
 }
 
-export async function fetchApiStats(apiKey: string, id: string): Promise<ApiStats> {
-  return readJson(await signedPublisherFetch(absolute(`/apis/${id}/stats`), apiKey));
+export async function fetchApiStats(
+  apiKey: string,
+  id: string,
+  query: ApiStatsQuery = {},
+): Promise<ApiStats> {
+  const params = new URLSearchParams();
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.offset !== undefined) params.set("offset", String(query.offset));
+  const qs = params.toString();
+  return readJson(
+    await signedPublisherFetch(absolute(`/apis/${id}/stats${qs ? `?${qs}` : ""}`), apiKey),
+  );
 }
 
 export interface TimeSeriesPoint {

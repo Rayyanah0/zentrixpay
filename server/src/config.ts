@@ -13,6 +13,15 @@ const envSchema = z.object({
   STELLAR_NETWORK: z.enum(["testnet", "mainnet"]).default("testnet"),
   NETWORK: z.string().min(1),
   FACILITATOR_URL: z.string().default("https://www.x402.org/facilitator"),
+  // Readiness probe for the x402 facilitator (#133): a read-only GET of
+  // `${FACILITATOR_URL}/supported`, bounded by this timeout. It never starts a
+  // payment. Set READINESS_REQUIRE_FACILITATOR=false to report the check
+  // without failing readiness (e.g. a deployment that serves no paid calls).
+  FACILITATOR_HEALTH_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2_000),
+  READINESS_REQUIRE_FACILITATOR: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   USDC_CONTRACT_ID: z.string().min(1),
 
   // Soroban
@@ -144,6 +153,13 @@ const envSchema = z.object({
     .default(180),
   API_CALL_RETENTION_INTERVAL_MS: z.coerce.number().int().min(0).default(3_600_000),
   API_CALL_RETENTION_BATCH_SIZE: z.coerce.number().int().min(1).max(10_000).default(1_000),
+
+  // Recovery of api_calls rows whose insert failed (#134,
+  // docs/api-call-recovery.md). Failed rows are spooled to
+  // API_CALL_OUTBOX_DIR and retried every API_CALL_RECOVERY_INTERVAL_MS
+  // (0 disables the worker; spooled rows then wait for the next start).
+  API_CALL_OUTBOX_DIR: z.string().min(1).default("./data/api-call-outbox"),
+  API_CALL_RECOVERY_INTERVAL_MS: z.coerce.number().int().min(0).default(30_000),
 });
 
 const parsed = envSchema.safeParse(envWithDefaults);

@@ -183,16 +183,16 @@ Call zentrixpay_api_info with {"id": "api_weather_current"}.
 
 `zentrixpay_call` performs the HTTP request and settles payment in the same step. Parameters:
 
-| Parameter | Type | Required | Description |
-| --- | --- | --- | --- |
-| `id` | string | yes | API id from `zentrixpay_list_apis`. |
-| `method` | string | no | HTTP method; defaults to the API's first supported method. |
-| `path` | string | no | Path appended to the API's `baseUrl`. |
-| `query` | object | no | Query-string parameters. |
-| `body` | object | no | JSON request body (for `POST`/`PUT`/`PATCH`). |
-| `headers` | object | no | Extra request headers. |
-| `maxPricePerCall` | integer | no | Safety ceiling. The call is refused if the API's price exceeds this value. |
-| `confirmMainnet` | boolean | no | Must be `true` to spend real funds on mainnet. |
+| Parameter         | Type    | Required | Description                                                                |
+| ----------------- | ------- | -------- | -------------------------------------------------------------------------- |
+| `id`              | string  | yes      | API id from `zentrixpay_list_apis`.                                        |
+| `method`          | string  | no       | HTTP method; defaults to the API's first supported method.                 |
+| `path`            | string  | no       | Path appended to the API's `baseUrl`.                                      |
+| `query`           | object  | no       | Query-string parameters.                                                   |
+| `body`            | object  | no       | JSON request body (for `POST`/`PUT`/`PATCH`).                              |
+| `headers`         | object  | no       | Extra request headers.                                                     |
+| `maxPricePerCall` | integer | no       | Safety ceiling. The call is refused if the API's price exceeds this value. |
+| `confirmMainnet`  | boolean | no       | Must be `true` to spend real funds on mainnet.                             |
 
 ### 3.1 A simple GET
 
@@ -315,6 +315,25 @@ If `confirmMainnet` is omitted or `false` on a mainnet API, the tool returns:
 **Operator tip:** keep agents on testnet until you have reviewed their prompts and ceilings. Only enable mainnet confirmation for agents you trust to spend real funds.
 
 ---
+
+### 3.5 Safe response headers
+
+The `zentrixpay_call` result includes a `headers` object with a small, documented allowlist of upstream response headers, so agents can follow pagination, honour retry hints and reuse caching validators:
+
+| Purpose             | Headers                                                                                                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pagination          | `link`, `x-total-count`, `x-next-cursor`, `x-page`, `x-per-page`, `x-total-pages`                                                                                              |
+| Retry / rate limits | `retry-after`, `ratelimit`, `ratelimit-policy`, `ratelimit-limit`, `ratelimit-remaining`, `ratelimit-reset`, `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset` |
+| Caching / content   | `cache-control`, `etag`, `last-modified`, `expires`, `content-language`, `content-length`                                                                                      |
+| Correlation         | `x-request-id`                                                                                                                                                                 |
+
+Names are lower-case and long values are cut to 1,024 characters. Every other header is dropped. These are **never** returned, even if they appear on the upstream response:
+
+- cookies (`set-cookie`, `set-cookie2`);
+- hop-by-hop headers (`connection`, `keep-alive`, `transfer-encoding`, `upgrade`, `te`, `trailer`, `proxy-*`, and any header named in `Connection`);
+- x402 payment challenge and settlement headers (`www-authenticate`, `payment-required`, `payment-response`, `x-payment*`). The settlement transaction is reported separately as `txHash`.
+
+The allowlist lives in `mcp/src/responseHeaders.ts` (`SAFE_RESPONSE_HEADERS`).
 
 ## 4. Purchase history — `zentrixpay_purchase_history`
 
@@ -610,13 +629,13 @@ The agent should produce, in order: a wallet address, a list of matching APIs, t
 
 ## 7. Troubleshooting
 
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| `insufficient_balance` | Wallet balance below the API price. | Fund the address shown by `zentrixpay_wallet_info`. |
-| `price_exceeds_ceiling` | `maxPricePerCall` below the API price. | Raise the ceiling or pick a cheaper API. |
-| `mainnet_confirmation_required` | Mainnet call without `confirmMainnet: true`. | Re-issue with `confirmMainnet: true` if you intend to spend real funds. |
-| `api_not_verified` | Provider has not completed ownership verification. | Provider must call `zentrixpay_verify_api_ownership`. |
-| `payment_failed` | On-chain settlement reverted. | Check the wallet balance and network; retry the call. |
+| Symptom                         | Likely cause                                       | Fix                                                                     |
+| ------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `insufficient_balance`          | Wallet balance below the API price.                | Fund the address shown by `zentrixpay_wallet_info`.                     |
+| `price_exceeds_ceiling`         | `maxPricePerCall` below the API price.             | Raise the ceiling or pick a cheaper API.                                |
+| `mainnet_confirmation_required` | Mainnet call without `confirmMainnet: true`.       | Re-issue with `confirmMainnet: true` if you intend to spend real funds. |
+| `api_not_verified`              | Provider has not completed ownership verification. | Provider must call `zentrixpay_verify_api_ownership`.                   |
+| `payment_failed`                | On-chain settlement reverted.                      | Check the wallet balance and network; retry the call.                   |
 
 ---
 

@@ -210,3 +210,53 @@ export const apiCatalogQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(CATALOG_MAX_LIMIT).default(CATALOG_DEFAULT_LIMIT),
   offset: z.coerce.number().int().min(0).default(0),
 });
+
+// ── API stats: date range + pagination (#143) ────────────────────────────────
+
+export const STATS_DEFAULT_LIMIT = 50;
+export const STATS_MAX_LIMIT = 100;
+/** Longest date range a single stats request may cover. */
+export const STATS_MAX_RANGE_DAYS = 366;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** ISO-8601 date (`2026-01-31`) or date-time (`2026-01-31T12:00:00Z`). */
+const isoDateOrDateTime = z
+  .string()
+  .trim()
+  .refine((v) => /^\d{4}-\d{2}-\d{2}(T.*)?$/.test(v) && !Number.isNaN(Date.parse(v)), {
+    message: "must be an ISO-8601 date or date-time",
+  })
+  .transform((v) => new Date(v));
+
+/**
+ * Query for GET /apis/:id/stats. `from` is inclusive and `to` is exclusive, so
+ * consecutive ranges never double-count a call. The same range is applied to
+ * the aggregates and to the paged call history.
+ */
+export const apiStatsQuerySchema = z
+  .object({
+    from: isoDateOrDateTime.optional(),
+    to: isoDateOrDateTime.optional(),
+    limit: z.coerce.number().int().min(1).max(STATS_MAX_LIMIT).default(STATS_DEFAULT_LIMIT),
+    offset: z.coerce.number().int().min(0).max(100_000).default(0),
+  })
+  .strict()
+  .superRefine((q, ctx) => {
+    // Field-level issues are reported on their own; only compare valid dates.
+    if (!(q.from === undefined || q.from instanceof Date)) return;
+    if (!(q.to === undefined || q.to instanceof Date)) return;
+    if (q.from && q.to && q.from.getTime() > q.to.getTime()) {
+      ctx.addIssue({ code: "custom", path: ["from"], message: "from must not be after to" });
+    }
+    const start = q.from?.getTime();
+    const end = q.to?.getTime() ?? Date.now();
+    if (start !== undefined && end - start > STATS_MAX_RANGE_DAYS * DAY_MS) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["from"],
+        message: `range must not exceed ${STATS_MAX_RANGE_DAYS} days`,
+      });
+    }
+  });
+
+export type ApiStatsQuery = z.infer<typeof apiStatsQuerySchema>;

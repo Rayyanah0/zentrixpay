@@ -881,9 +881,36 @@ export const openApiSpec: OpenApiDocument = {
       get: {
         tags: ["Statistics"],
         summary: "Usage and revenue for one of your APIs",
-        description: "Totals plus the 50 most recent calls. Archived APIs are included.",
+        description:
+          "Totals plus a page of recent calls, newest first. `from`/`to` restrict both the totals and the call history to the same window (from inclusive, to exclusive, at most 366 days). Archived APIs are included.",
         operationId: "getApiStats",
         security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          {
+            name: "from",
+            in: "query",
+            description: "Start of the window, inclusive. ISO-8601 date or date-time.",
+            schema: { type: "string", format: "date-time" },
+          },
+          {
+            name: "to",
+            in: "query",
+            description: "End of the window, exclusive. ISO-8601 date or date-time.",
+            schema: { type: "string", format: "date-time" },
+          },
+          {
+            name: "limit",
+            in: "query",
+            description: "Calls per page.",
+            schema: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+          },
+          {
+            name: "offset",
+            in: "query",
+            description: "Calls to skip.",
+            schema: { type: "integer", minimum: 0, default: 0 },
+          },
+        ],
         responses: {
           "200": { description: "Statistics.", content: json(schemaRef("ApiStats")) },
           "400": responseRef("BadRequest"),
