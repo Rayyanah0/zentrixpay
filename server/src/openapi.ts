@@ -131,7 +131,9 @@ export const openApiSpec: OpenApiDocument = {
       "routes also need `X-Timestamp` and `X-Signature` (HMAC-SHA256).\n\n" +
       "**Pagination.** List endpoints use `limit` / `offset` query parameters.\n\n" +
       "**Errors.** Errors are JSON objects with an `error` field. Validation errors (400) " +
-      "carry the field-by-field validation result in `error`.",
+      "carry the field-by-field validation result in `error`.\n\n" +
+      "**Pricing.** The order in which allowlists, passes, free quota, credits and price " +
+      "rules are applied to a paid call is documented in `docs/paid-call-pricing.md`.",
   },
   servers: [{ url: "/", description: "Current server" }],
   tags: [

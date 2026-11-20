@@ -56,3 +56,8 @@ If you run into issues with the Git hooks, make sure `pnpm` (or `npx`) is availa
 
 <!-- handsoff-issue-22 -->
 - #22: MCP: zentrixpay_wallet_balances is validated but never advertised
+
+## Further reading
+
+- [What a paid call costs](docs/paid-call-pricing.md): the decision order for allowlists, passes, free quota, credits and price rules, with examples. The design decisions behind it are in [docs/adr/](docs/adr/).
+- [Operator runbook](docs/operator-runbook.md): facilitator or RPC outages, a full database, abuse, leaked keys, a lost `UPSTREAM_SECRET_KEY`.
