@@ -21,7 +21,7 @@
  * changes in code changes the generated reference in the same PR.
  */
 
-import { DEFAULT_MAX_AUTO_PAY_USDC } from "./paymentCeiling.js";
+import { DEFAULT_MAX_AUTO_FEE_STROOPS, DEFAULT_MAX_AUTO_PAY_USDC } from "./paymentCeiling.js";
 import { DEFAULT_PAID_CONFIRMATION_POLICY } from "./paidOperations.js";
 import { DEFAULT_MAINNET_MUTATION_POLICY } from "./mainnetGuardrails.js";
 import { DEFAULT_RETRY_POLICY } from "./retry.js";
@@ -133,6 +133,13 @@ export const ENV_VAR_DOCS: EnvVarDoc[] = [
     default: `${DEFAULT_MAX_ATTEMPTS} (unlimited)`,
     source: "mcp/src/rpcFailover.ts",
   },
+  {
+    name: "PLATFORM_WALLET_ADDRESS",
+    description:
+      "Platform wallet that receives publisher payouts (the MCP-side twin of the server's PAY_TO). zentrixpay_wallet_balances reports its balance next to the agent wallets.",
+    default: "unset — the platform balance is not reported",
+    source: "mcp/src/config.ts",
+  },
 
   // ── Guardrails & policies ──────────────────────────────────────────────────
   {
@@ -164,6 +171,20 @@ export const ENV_VAR_DOCS: EnvVarDoc[] = [
     description:
       "Ceiling for the automatic x402 settlement inside zentrixpay_buy. A purchase above the ceiling needs a per-call maxAutoPayUsdc at least equal to the price.",
     default: `${DEFAULT_MAX_AUTO_PAY_USDC} USDC`,
+    source: "mcp/src/paymentCeiling.ts",
+  },
+  {
+    name: "ZENTRIXPAY_SESSION_SPEND_LIMIT_USDC",
+    description:
+      "Cap on the total USDC spent by paid calls in one server process. Once a call would push the running total past it, no further payment is submitted until the agent restarts.",
+    default: "unset (no session limit)",
+    source: "mcp/src/paymentCeiling.ts",
+  },
+  {
+    name: "ZENTRIXPAY_MAX_AUTO_FEE_STROOPS",
+    description:
+      "Ceiling on the network fee of a sponsored on-chain mutation. A transaction whose fee exceeds it is refused. Must be a non-negative integer.",
+    default: `${DEFAULT_MAX_AUTO_FEE_STROOPS} (stroops)`,
     source: "mcp/src/paymentCeiling.ts",
   },
 
@@ -200,6 +221,13 @@ export const ENV_VAR_DOCS: EnvVarDoc[] = [
     name: "ZENTRIXPAY_PURCHASES_FILE",
     description: "Path of the purchase-receipt file zentrixpay_buy appends to.",
     default: "~/.zentrixpay/purchases.json",
+    source: "mcp/src/purchaseHistory.ts",
+  },
+  {
+    name: "ZENTRIXPAY_PURCHASES_EPOCH",
+    description:
+      "Identity of the state file the purchase receipts belong to. A receipt file recorded under a different epoch is ignored, so a backup restored after zentrixpay_reset does not merge another wallet's receipts.",
+    default: "empty string",
     source: "mcp/src/purchaseHistory.ts",
   },
 
@@ -272,6 +300,14 @@ export const ENV_VAR_DOCS: EnvVarDoc[] = [
   },
 
   // ── Observability & mode ───────────────────────────────────────────────────
+  {
+    name: "MCP_LOG_LEVEL",
+    description:
+      "Minimum level the server logs to stderr. Case-insensitive; an unrecognized value falls back to info.",
+    default: "info",
+    values: ["debug", "info", "warn", "error"],
+    source: "mcp/src/logger.ts",
+  },
   {
     name: "ZENTRIXPAY_METRICS",
     description:

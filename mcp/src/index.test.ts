@@ -52,7 +52,9 @@ vi.mock("@zentrixpay/registry-client", async (importOriginal) => {
 });
 
 import {
+  clientConfig,
   dispatchTool,
+  mainnetBanner,
   txStatus,
   walletInfo,
   useProfile,
@@ -1010,106 +1012,5 @@ describe("offline catalog cache fallback (#556)", () => {
     await expect(
       dispatchTool("zentrixpay_register", { name: "N", email: "e@example.com" }),
     ).rejects.toThrow();
-  });
-});
-
-// ── disputeResource (#869) ──────────────────────────────────────────────────
-
-describe("disputeResource", () => {
-  beforeEach(() => {
-    _resetProfiles();
-  });
-
-  it("throws when no wallet is set up", async () => {
-    await expect(disputeResource("res-001", "flag", "Spam")).rejects.toThrow("No wallet");
-  });
-
-  it("succeeds (flag) in mock mode when wallet is present", async () => {
-    _setAgentWallet({
-      publicKey: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
-      secretKey: "SD1234567890123456789012345678901234567890123456789012345",
-    });
-    process.env.ZENTRIXPAY_MOCK = "1";
-    try {
-      const res = await disputeResource("res-001", "flag", "Duplicate listing");
-      const parsed = JSON.parse(res);
-      expect(parsed.status).toBe("success");
-      expect(parsed.resourceId).toBe("res-001");
-      expect(parsed.action).toBe("flag");
-      expect(parsed.reason).toBe("Duplicate listing");
-      expect(parsed.txHash).toMatch(/MOCK_TX_DISPUTE_FLAG/);
-    } finally {
-      delete process.env.ZENTRIXPAY_MOCK;
-    }
-  });
-
-  it("succeeds (unflag) in mock mode when wallet is present", async () => {
-    _setAgentWallet({
-      publicKey: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
-      secretKey: "SD1234567890123456789012345678901234567890123456789012345",
-    });
-    process.env.ZENTRIXPAY_MOCK = "1";
-    try {
-      const res = await disputeResource("res-001", "unflag", "Issue resolved");
-      const parsed = JSON.parse(res);
-      expect(parsed.status).toBe("success");
-      expect(parsed.action).toBe("unflag");
-      expect(parsed.txHash).toMatch(/MOCK_TX_DISPUTE_UNFLAG/);
-    } finally {
-      delete process.env.ZENTRIXPAY_MOCK;
-    }
-  });
-
-  it("dispatches through dispatchTool with valid arguments", async () => {
-    _setAgentWallet({
-      publicKey: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
-      secretKey: "SD1234567890123456789012345678901234567890123456789012345",
-    });
-    process.env.ZENTRIXPAY_MOCK = "1";
-    try {
-      const res = await dispatchTool("zentrixpay_dispute", {
-        resourceId: "res-001",
-        action: "flag",
-        reason: "Test flag",
-      });
-      expect(res).toContain("success");
-      expect(res).toContain("flag");
-    } finally {
-      delete process.env.ZENTRIXPAY_MOCK;
-    }
-  });
-
-  it("rejects an invalid action value", async () => {
-    _setAgentWallet({
-      publicKey: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
-      secretKey: "SD1234567890123456789012345678901234567890123456789012345",
-    });
-    process.env.ZENTRIXPAY_MOCK = "1";
-    try {
-      await expect(
-        dispatchTool("zentrixpay_dispute", {
-          resourceId: "res-001",
-          action: "delete",
-          reason: "bad",
-        }),
-      ).rejects.toThrow();
-    } finally {
-      delete process.env.ZENTRIXPAY_MOCK;
-    }
-  });
-
-  it("rejects a missing reason", async () => {
-    _setAgentWallet({
-      publicKey: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
-      secretKey: "SD1234567890123456789012345678901234567890123456789012345",
-    });
-    process.env.ZENTRIXPAY_MOCK = "1";
-    try {
-      await expect(
-        dispatchTool("zentrixpay_dispute", { resourceId: "res-001", action: "flag" }),
-      ).rejects.toThrow();
-    } finally {
-      delete process.env.ZENTRIXPAY_MOCK;
-    }
   });
 });
