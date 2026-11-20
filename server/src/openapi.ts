@@ -9,7 +9,8 @@ export const openApiSpec = {
     version: "1.0.0",
     description:
       "A marketplace where humans and AI agents publish and trade digital resources via HTTP 402 payments on Stellar.\n\n" +
-      "**Optional request signatures:** When the server has `REQUIRE_REQUEST_SIGNATURE=true`, publisher mutations (POST/DELETE on `/resources/*`) must include `X-Timestamp` and `X-Signature` headers. See `docs/request-signature.md`.",
+      "**Optional request signatures:** When the server has `REQUIRE_REQUEST_SIGNATURE=true`, publisher mutations (POST/DELETE on `/resources/*`) must include `X-Timestamp` and `X-Signature` headers. See `docs/request-signature.md`.\n\n" +
+      "**Pay-per-call proxy (`ANY /api/{id}/*`):** each call costs the API's `price` in USDC and settles only when the response status is below 400. Allowlists, passes, free quota, credits and price rules are not implemented. See `docs/paid-call-pricing.md` for the full decision order.",
     license: { name: "MIT" },
   },
   servers: [{ url: "/", description: "Current server" }],

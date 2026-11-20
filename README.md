@@ -19,6 +19,8 @@ caller ──same request + signed USDC payment─▶ ZentrixPay ──forward�
 4. ZentrixPay forwards the request to the provider's real API and returns the response.
 5. The payment settles on Stellar **only if the API answered with a status below 400**. Errors, timeouts and oversized responses are never charged.
 
+The full decision order — what is checked before payment, what is charged, with examples — is in [docs/paid-call-pricing.md](docs/paid-call-pricing.md). The design decisions behind it are recorded in [docs/adr/](docs/adr/).
+
 ## For API providers
 
 1. **Register as a provider** — `POST /publishers` with your name, email and payout wallet. You get an API key (shown once).
@@ -121,6 +123,8 @@ Proxy settings in `server/.env`:
 | `PROXY_ALLOW_PRIVATE_UPSTREAMS` | `false`    | Local development only: allow upstreams on localhost/private networks     |
 
 Payments are settled by the x402 facilitator (`FACILITATOR_URL`, default `https://www.x402.org/facilitator`, testnet fees sponsored).
+
+For production incidents (facilitator or RPC outages, a full database, abuse, leaked keys, a lost `UPSTREAM_SECRET_KEY`), see the [operator runbook](docs/operator-runbook.md).
 
 ## Security
 
