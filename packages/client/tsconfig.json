@@ -1,0 +1,5 @@
+{
+  "extends": "../../packages/registry-client/tsconfig.json",
+  "compilerOptions": { "outDir": "dist", "rootDir": "src", "declaration": true, "declarationMap": true },
+  "include": ["src/**/*.ts"]
+}

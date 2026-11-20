@@ -1,5 +1,5 @@
 import { config } from "../../config.js";
-import { rootLogger } from "../logger.js";
+import { logger } from "../logger.js";
 import { MemorySlidingWindowStore, RedisSlidingWindowStore } from "./stores.js";
 import type { RateLimitStore } from "./types.js";
 
@@ -7,17 +7,18 @@ let sharedStore: RateLimitStore | null = null;
 
 export function createRateLimitStore(): RateLimitStore {
   if (config.REDIS_URL) {
-    rootLogger.info(
-      { event: "rate_limit_store", backend: "redis" },
-      "using Redis rate-limit store",
-    );
+    logger.info({ event: "rate_limit_store", backend: "redis" }, "using Redis rate-limit store");
     return new RedisSlidingWindowStore(config.REDIS_URL);
   }
 
-  rootLogger.info(
-    { event: "rate_limit_store", backend: "memory" },
-    "using in-memory rate-limit store",
-  );
+  if (config.NODE_ENV === "production") {
+    logger.warn(
+      { event: "rate_limit_store", backend: "memory" },
+      "rate limiting is using in-memory storage in production; limits are per instance",
+    );
+  }
+
+  logger.info({ event: "rate_limit_store", backend: "memory" }, "using in-memory rate-limit store");
   return new MemorySlidingWindowStore();
 }
 

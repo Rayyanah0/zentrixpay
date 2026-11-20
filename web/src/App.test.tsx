@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import App from "./App.js";
 import {
   fetchApis,
@@ -21,6 +22,7 @@ vi.mock("./api/apis.js", async () => {
     updateApi: vi.fn(),
     verifyApiOwnership: vi.fn(),
     fetchApiStats: vi.fn(),
+    fetchApiById: vi.fn(),
   };
 });
 
@@ -29,11 +31,15 @@ const weather: PublicApi = {
   name: "Weather API",
   description: "Forecasts for any city",
   price: "0.01",
+  priceRules: [],
   currency: "USDC",
   walletAddress: "GPROVIDER",
   allowedMethods: ["GET", "POST"],
   tags: ["weather"],
+  healthy: true,
   proxyUrl: "http://gw.test/api/api1",
+  openapiUrl: null,
+  onchain: { registered: false, contractId: "", txHash: null },
   createdAt: "2026-10-01T00:00:00Z",
 };
 
@@ -43,6 +49,11 @@ const owned: OwnerApi = {
   upstreamHeaderName: null,
   hasUpstreamSecret: false,
   timeoutMs: null,
+  maxResponseBytes: null,
+  webhookUrl: null,
+  hasWebhookSecret: false,
+  healthPath: null,
+  health: { healthy: true, consecutiveFailures: 0, lastCheckedAt: null },
   listed: false,
   ownershipVerified: false,
   ownershipVerification: {
@@ -58,23 +69,31 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+function renderApp(path = "/") {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  );
+}
+
 describe("App", () => {
   it("lists APIs with price and methods", async () => {
-    render(<App />);
+    renderApp();
     expect(await screen.findByText("Weather API")).toBeInTheDocument();
     expect(screen.getByText(/0\.01 USDC/)).toBeInTheDocument();
     expect(screen.getByText("POST")).toBeInTheDocument();
   });
 
   it("searches the catalog", async () => {
-    render(<App />);
+    renderApp();
     await screen.findByText("Weather API");
     await userEvent.type(screen.getByLabelText("Search APIs"), "geo");
     await waitFor(() => expect(fetchApis).toHaveBeenLastCalledWith("geo", expect.anything()));
   });
 
   it("opens the try-it console with the call preview", async () => {
-    render(<App />);
+    renderApp();
     await userEvent.click(await screen.findByRole("button", { name: "Try it" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Path"), "forecast/lagos");
@@ -88,18 +107,18 @@ describe("App", () => {
       name: "Ada",
       email: "ada@example.com",
       walletAddress: "GADA",
-      apiKey: "mv_secret",
+      apiKey: "zp_secret",
     });
-    render(<App />);
+    renderApp();
     await userEvent.click(screen.getByRole("button", { name: "Sell your API" }));
     await userEvent.type(screen.getByLabelText("Name"), "Ada");
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
     await userEvent.type(screen.getByLabelText("Payout wallet"), "GADA");
     await userEvent.click(screen.getByRole("button", { name: "Register" }));
-    expect(await screen.findByText("mv_secret")).toBeInTheDocument();
+    expect(await screen.findByText("zp_secret")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /I saved it/ }));
     expect(await screen.findByText("Ownership not verified")).toBeInTheDocument();
     expect(screen.getByText("zentrixpay-verification=abc")).toBeInTheDocument();
-    expect(fetchMyApis).toHaveBeenCalledWith("mv_secret");
+    expect(fetchMyApis).toHaveBeenCalledWith("zp_secret");
   });
 });

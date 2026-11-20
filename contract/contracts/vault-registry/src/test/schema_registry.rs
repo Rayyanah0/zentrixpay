@@ -202,7 +202,7 @@ fn find_settags_event(env: &Env, contract: &Address) -> Option<(Vec<String>, Vec
 // Tag index repair design (#429)
 // ---------------------------------------------------------------------------
 //
-// No on-chain tag index exists yet (see docs/tag-index-repair-design.md), but
+// No on-chain tag index exists yet (see contract/docs/tag-index-repair-design.md), but
 // a future one's repair path could rebuild id->tags associations either by
 // reading `Resource.tags` directly or by replaying `register`/`settags`
 // events. This test backs the ADR's "no third source of truth needed" claim
@@ -415,6 +415,9 @@ fn full_workflow_emits_exactly_the_documented_events() {
     record(&env, &client, &mut observed);
 
     client.repair_tag_index(&Vec::from_array(&env, [r0.clone(), r1.clone(), r2.clone()])); // -> "retagidx"
+    record(&env, &client, &mut observed);
+
+    client.repair_creator_index(&Address::generate(&env), &Vec::new(&env)); // -> "recrtidx"
     record(&env, &client, &mut observed);
 
     client.set_paused(&admin2, &false); // -> "pause"

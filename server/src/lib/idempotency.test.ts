@@ -1,9 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // idempotency.ts imports config; mock it so the test doesn't require a full env.
-vi.mock("../config.js", () => ({ config: { IDEMPOTENCY_TTL_MS: 60_000 } }));
+vi.mock("../config.js", () => ({
+  config: {
+    NODE_ENV: "test",
+    IDEMPOTENCY_TTL_MS: 60_000,
+    PROXY_IDEMPOTENCY_TTL_MS: 60_000,
+    PROXY_IDEMPOTENCY_MAX_ENTRIES: 100,
+  },
+}));
 
-import { getIdempotencyStore, idempotencyCacheKey } from "./idempotency.js";
+import {
+  getIdempotencyStore,
+  getProxyIdempotencyStore,
+  idempotencyCacheKey,
+  type ProxyIdempotencyKey,
+} from "./idempotency.js";
 
 describe("idempotencyCacheKey", () => {
   it("scopes keys per publisher", () => {
@@ -219,6 +231,59 @@ describe("idempotency store – concurrent requests", () => {
     const reads = Array.from({ length: 10 }, () => store.get(key));
     reads.forEach((r) => {
       expect(r).toEqual({ inProgress: false, result: committed });
+    });
+  });
+
+  describe("paid proxy idempotency store", () => {
+    const store = getProxyIdempotencyStore();
+    const key: ProxyIdempotencyKey = { apiId: 7, payer: "payer-a", key: "proxy-retry" };
+    const fingerprint = "request-fingerprint";
+
+    beforeEach(async () => {
+      await store.delete(key);
+    });
+
+    it("atomically allows one in-progress claim and replays its completed response", async () => {
+      const claims = await Promise.all([
+        store.claim(key, fingerprint),
+        store.claim(key, fingerprint),
+      ]);
+
+      expect(claims.filter(Boolean)).toHaveLength(1);
+      expect(await store.get(key)).toEqual({ inProgress: true, fingerprint });
+
+      await store.complete(key, {
+        inProgress: false,
+        fingerprint,
+        paymentHash: "payment-hash",
+        response: {
+          status: 201,
+          headers: { "content-type": "application/json" },
+          body: Buffer.from('{"ok":true}'),
+        },
+        txHash: null,
+      });
+
+      expect(await store.get(key)).toEqual({
+        inProgress: false,
+        fingerprint,
+        paymentHash: "payment-hash",
+        response: {
+          status: 201,
+          headers: { "content-type": "application/json" },
+          body: Buffer.from('{"ok":true}'),
+        },
+        txHash: null,
+      });
+    });
+
+    it("keeps claims isolated by API and payer", async () => {
+      const sameKeyOtherPayer = { ...key, payer: "payer-b" };
+      const sameKeyOtherApi = { ...key, apiId: 8 };
+
+      expect(await store.claim(key, fingerprint)).toBe(true);
+      expect(await store.claim(sameKeyOtherPayer, fingerprint)).toBe(true);
+      expect(await store.claim(sameKeyOtherApi, fingerprint)).toBe(true);
     });
   });
 });

@@ -5,17 +5,30 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "";
 export const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 export type HttpMethod = (typeof HTTP_METHODS)[number];
 
+export interface ApiPriceRule {
+  method: HttpMethod;
+  pathPattern: string;
+  price: string;
+}
+
 /** A pay-per-call API as anyone sees it in the catalog. */
 export interface PublicApi {
   id: string;
   name: string;
   description: string | null;
   price: string;
+  priceRules: ApiPriceRule[];
   currency: "USDC";
   walletAddress: string;
   allowedMethods: HttpMethod[];
   tags: string[];
+  /** False while health checks say the upstream is down; hidden from the catalog. */
+  healthy: boolean;
   proxyUrl: string;
+  /** Present when the provider uploaded an OpenAPI document. */
+  openapiUrl: string | null;
+  /** The API's record in the vault registry, so callers can check price and payee. */
+  onchain: { registered: boolean; contractId: string; txHash: string | null };
   createdAt: string;
 }
 
@@ -24,8 +37,17 @@ export interface OwnerApi extends PublicApi {
   upstreamUrl: string;
   upstreamHeaderName: string | null;
   hasUpstreamSecret: boolean;
+  upstreamQueryParamName: string | null;
+  hasUpstreamQuerySecret: boolean;
   timeoutMs: number | null;
+  /** Per-API response cap in bytes; null means the server-wide limit. */
+  maxResponseBytes: number | null;
+  webhookUrl: string | null;
+  hasWebhookSecret: boolean;
+  healthPath: string | null;
+  health: { healthy: boolean; consecutiveFailures: number; lastCheckedAt: string | null };
   listed: boolean;
+  onchainStatus: "none" | "pending" | "registered" | "failed";
   ownershipVerified: boolean;
   ownershipVerification: { url: string; expectedContent: string };
 }
@@ -39,6 +61,10 @@ export interface ApiCall {
   path: string;
   responseStatus: number;
   durationMs: number;
+  refundStatus: "pending" | "refunded" | null;
+  refundAmount: string | null;
+  refundTxHash: string | null;
+  refundedAt: string | null;
   createdAt: string;
 }
 
@@ -49,8 +75,24 @@ export interface ApiStats {
   revenue: string;
   uniquePayers: number;
   avgDurationMs: number;
+  refundedCalls: number;
+  refunded: string;
+  netRevenue: string;
   currency: "USDC";
   recentCalls: ApiCall[];
+  /** Window the totals and recentCalls cover (#143); null bounds are open. */
+  range?: { from: string | null; to: string | null };
+  pagination?: { limit: number; offset: number; total: number; hasMore: boolean };
+}
+
+/** Optional window and paging for GET /apis/:id/stats (#143). */
+export interface ApiStatsQuery {
+  /** Inclusive ISO-8601 date or date-time. */
+  from?: string;
+  /** Exclusive ISO-8601 date or date-time. */
+  to?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface ApiInput {
@@ -58,10 +100,17 @@ export interface ApiInput {
   description?: string | null;
   upstreamUrl?: string;
   price?: string;
+  priceRules?: ApiPriceRule[] | null;
   walletAddress?: string;
   allowedMethods?: HttpMethod[];
   upstreamHeader?: { name: string; value: string } | null;
+  upstreamQueryParam?: { name: string; value: string } | null;
+  /** OpenAPI 3 document as JSON/YAML text; null removes it. */
+  openapiSpec?: string | null;
   timeoutMs?: number | null;
+  maxResponseBytes?: number | null;
+  webhook?: { url: string; secret: string } | null;
+  healthPath?: string | null;
   tags?: string[];
   listed?: boolean;
 }
@@ -99,10 +148,24 @@ async function readJson<T>(res: Response): Promise<T> {
   return body as T;
 }
 
-export async function fetchApis(q: string, signal?: AbortSignal): Promise<PublicApi[]> {
+export async function fetchApis(
+  q: string,
+  signal?: AbortSignal,
+  limit = 20,
+  offset = 0,
+  tags: string[] = [],
+): Promise<PublicApi[]> {
   const url = new URL(`${API_BASE}/apis`, window.location.origin);
   if (q.trim()) url.searchParams.set("q", q.trim());
-  url.searchParams.set("limit", "100");
+  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("offset", String(offset));
+  // ?tag=a&tag=b — all tags must be present on the API (AND semantics).
+  for (const tag of tags) url.searchParams.append("tag", tag);
+  return readJson(await fetch(url, { signal }));
+}
+
+export async function fetchApiById(id: string, signal?: AbortSignal): Promise<PublicApi> {
+  const url = new URL(`${API_BASE}/apis/${encodeURIComponent(id)}`, window.location.origin);
   return readJson(await fetch(url, { signal }));
 }
 
@@ -154,6 +217,45 @@ export async function verifyApiOwnership(apiKey: string, id: string): Promise<Ow
   );
 }
 
-export async function fetchApiStats(apiKey: string, id: string): Promise<ApiStats> {
-  return readJson(await signedPublisherFetch(absolute(`/apis/${id}/stats`), apiKey));
+/** Archive (soft-delete) an API: it disappears from the catalog and dashboard; stats remain. */
+export async function archiveApi(apiKey: string, id: string): Promise<void> {
+  await readJson(await signedPublisherFetch(absolute(`/apis/${id}`), apiKey, { method: "DELETE" }));
+}
+
+export async function fetchApiStats(
+  apiKey: string,
+  id: string,
+  query: ApiStatsQuery = {},
+): Promise<ApiStats> {
+  const params = new URLSearchParams();
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.offset !== undefined) params.set("offset", String(query.offset));
+  const qs = params.toString();
+  return readJson(
+    await signedPublisherFetch(absolute(`/apis/${id}/stats${qs ? `?${qs}` : ""}`), apiKey),
+  );
+}
+
+export interface TimeSeriesPoint {
+  date: string; // yyyy-mm-dd
+  calls: number;
+  revenue: string;
+}
+
+export interface ApiTimeSeries {
+  apiId: string;
+  days: 7 | 30 | 90;
+  series: TimeSeriesPoint[];
+}
+
+export async function fetchApiTimeSeries(
+  apiKey: string,
+  id: string,
+  days: 7 | 30 | 90,
+): Promise<ApiTimeSeries> {
+  return readJson(
+    await signedPublisherFetch(absolute(`/apis/${id}/stats/time-series?days=${days}`), apiKey),
+  );
 }

@@ -5,6 +5,16 @@
  */
 
 export const CATALOG_SORT_VALUES = ["newest", "price_asc", "price_desc", "title"] as const;
+
+/** Curated list of allowed catalog categories. */
+export const CATALOG_CATEGORIES = [
+  "Finance",
+  "Weather",
+  "Education",
+  "Health",
+  "Entertainment",
+] as const;
+export type CatalogCategory = (typeof CATALOG_CATEGORIES)[number];
 export type CatalogSort = (typeof CATALOG_SORT_VALUES)[number];
 
 export const CATALOG_DEFAULT_LIMIT = 20;
@@ -26,6 +36,8 @@ export interface CatalogFilters {
   tags?: string[];
   /** Listing state; matched client-side when present on results. */
   listed?: boolean;
+  /** Optional category filter; must match one of the curated categories. */
+  category?: CatalogCategory;
 }
 
 export type ParseCatalogFiltersResult =

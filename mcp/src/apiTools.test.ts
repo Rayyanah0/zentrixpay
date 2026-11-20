@@ -116,3 +116,107 @@ describe("provider tools", () => {
     ).rejects.toThrow(/together/);
   });
 });
+
+describe("zentrixpay_call safe response headers (#146)", () => {
+  it("returns allowlisted pagination, retry and caching headers", async () => {
+    const upstream = new Response("[]", {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        link: '<https://api.test/items?page=2>; rel="next"',
+        "x-total-count": "42",
+        "retry-after": "30",
+        etag: '"abc123"',
+        "x-ratelimit-remaining": "99",
+      },
+    });
+    const { handle } = setup({}, upstream);
+    const out = JSON.parse(await handle("zentrixpay_call", { apiId: "api1" }));
+    expect(out.headers).toEqual({
+      link: '<https://api.test/items?page=2>; rel="next"',
+      "x-total-count": "42",
+      "retry-after": "30",
+      etag: '"abc123"',
+      "x-ratelimit-remaining": "99",
+    });
+  });
+
+  it("excludes cookies, hop-by-hop and payment challenge headers", async () => {
+    const upstream = new Response("ok", {
+      status: 200,
+      headers: {
+        "set-cookie": "session=secret; HttpOnly",
+        connection: "keep-alive, x-request-id",
+        "keep-alive": "timeout=5",
+        "x-request-id": "listed-in-connection",
+        "payment-required": "challenge",
+        "payment-response": '{"transaction":"tx1"}',
+        "x-payment-response": '{"transaction":"tx1"}',
+        "www-authenticate": "Payment",
+        "x-upstream-secret": "nope",
+        "cache-control": "no-store",
+      },
+    });
+    const { handle } = setup({}, upstream);
+    const out = JSON.parse(await handle("zentrixpay_call", { apiId: "api1" }));
+    expect(out.headers).toEqual({ "cache-control": "no-store" });
+    expect(out.txHash).toBe("tx1");
+  });
+
+  it("returns an empty object when no safe headers are present", async () => {
+    const { handle } = setup();
+    const out = JSON.parse(await handle("zentrixpay_call", { apiId: "api1" }));
+    expect(out.headers).toEqual({});
+  });
+});
+
+describe("zentrixpay_api_stats range and paging (#143)", () => {
+  it("forwards from, to, limit and offset as query parameters", async () => {
+    const jsonFetch = vi.fn(async () => ({ ok: true, status: 200, data: { calls: 0 } }));
+    const { handle } = setup({ jsonFetch });
+    await handle("zentrixpay_api_stats", {
+      apiId: "api1",
+      from: "2026-01-01",
+      to: "2026-02-01",
+      limit: 10,
+      offset: 20,
+    });
+    expect(jsonFetch).toHaveBeenCalledWith(
+      "http://gw.test/apis/api1/stats?from=2026-01-01&to=2026-02-01&limit=10&offset=20",
+      { headers: { "x-api-key": "key" } },
+    );
+  });
+
+  it("keeps the plain URL when no optional arguments are given", async () => {
+    const jsonFetch = vi.fn(async () => ({ ok: true, status: 200, data: {} }));
+    const { handle } = setup({ jsonFetch });
+    await handle("zentrixpay_api_stats", { apiId: "api1" });
+    expect(jsonFetch).toHaveBeenCalledWith("http://gw.test/apis/api1/stats", {
+      headers: { "x-api-key": "key" },
+    });
+  });
+
+  it("rejects invalid paging arguments before calling the server", async () => {
+    const jsonFetch = vi.fn();
+    const { handle } = setup({ jsonFetch });
+    await expect(handle("zentrixpay_api_stats", { apiId: "api1", limit: -1 })).rejects.toThrow(
+      /limit must be a non-negative integer/,
+    );
+    await expect(handle("zentrixpay_api_stats", { apiId: "api1", offset: "5" })).rejects.toThrow(
+      /offset must be a non-negative integer/,
+    );
+    expect(jsonFetch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces server-side validation errors", async () => {
+    const jsonFetch = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      data: { error: { from: ["from must not be after to"] } },
+    }));
+    const { handle } = setup({ jsonFetch });
+    await expect(
+      handle("zentrixpay_api_stats", { apiId: "api1", from: "2026-02-01", to: "2026-01-01" }),
+    ).rejects.toThrow(/Invalid stats query/);
+  });
+});

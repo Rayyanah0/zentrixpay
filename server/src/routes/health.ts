@@ -1,10 +1,13 @@
 import { Router, type Router as RouterType } from "express";
-import { probeDatabase, probeSorobanRpc } from "../lib/probes.js";
+import { probeDatabase, probeFacilitator, probeSorobanRpc } from "../lib/probes.js";
 import { overallReadinessStatus } from "../lib/readiness.js";
 import { isAccepting } from "../lib/lifecycle.js";
 
 const router: RouterType = Router();
 
+// Liveness: the process is up. Deliberately independent of downstream
+// dependencies (database, RPC, payment facilitator) so a dependency outage
+// makes the pod not-ready instead of getting it restarted (#133).
 router.get("/health", (_req, res) => {
   res.json({
     status: "ok",
@@ -25,9 +28,13 @@ router.get("/health/ready", async (_req, res) => {
     return;
   }
 
-  const [database, sorobanRpc] = await Promise.all([probeDatabase(), probeSorobanRpc()]);
+  const [database, sorobanRpc, facilitator] = await Promise.all([
+    probeDatabase(),
+    probeSorobanRpc(),
+    probeFacilitator(),
+  ]);
 
-  const checks = { database, sorobanRpc };
+  const checks = { database, sorobanRpc, facilitator };
   const status = overallReadinessStatus(checks);
   const httpStatus = status === "ok" ? 200 : 503;
 

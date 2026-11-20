@@ -1,7 +1,16 @@
-import React, { useState } from "react";
-import type { PublicApi } from "../api/apis.js";
+import React, { useEffect, useRef, useState } from "react";
+import { callApi, createFreighterSigner } from "@zentrixpay/client";
+import { createFreighterSigner as createWalletSigner } from "../lib/x402Buy.js";
+import { explorerTxUrl } from "../lib/stellarExplorer.js";
+import type { HttpMethod, PublicApi } from "../api/apis.js";
+import {
+  DEFAULT_REQUEST_CONTENT_TYPE,
+  methodAllowsBody,
+  prepareRequestBody,
+  REQUEST_CONTENT_TYPES,
+  type RequestContentType,
+} from "../lib/requestBody.js";
 import type { WalletState } from "../hooks/useWalletConnection.js";
-import { callPaidApi, callUrl, type ApiCallResult } from "../lib/x402Call.js";
 
 interface Props {
   api: PublicApi;
@@ -9,203 +18,357 @@ interface Props {
   onClose: () => void;
 }
 
-const inputClass =
-  "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100";
+interface HeaderRow {
+  id: number;
+  name: string;
+  value: string;
+}
 
-function prettyBody(result: ApiCallResult): string {
-  if (result.contentType?.includes("json")) {
-    try {
-      return JSON.stringify(JSON.parse(result.body), null, 2);
-    } catch {
-      // Not valid JSON after all; show it raw.
-    }
-  }
-  return result.body;
+const BODY_PLACEHOLDERS: Record<RequestContentType, string> = {
+  "application/json": '{"key":"value"}',
+  "text/plain": "Any text",
+  "application/x-www-form-urlencoded": "key=value&other=1",
+  "application/xml": "<request><key>value</key></request>",
+};
+
+interface CallResult {
+  status: number;
+  charged: boolean;
+  price: string;
+  contentType: string;
+  body: unknown;
+  explorerUrl?: string;
 }
 
 export function TryItModal({ api, wallet, onClose }: Props) {
-  const [method, setMethod] = useState<string>(api.allowedMethods[0] ?? "GET");
-  const [path, setPath] = useState("");
-  const [query, setQuery] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const nextHeaderId = useRef(1);
+  const [method, setMethod] = useState<HttpMethod>(api.allowedMethods[0] ?? "GET");
+  const [path, setPath] = useState("/");
   const [body, setBody] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<ApiCallResult | null>(null);
+  const [contentType, setContentType] = useState<RequestContentType>(DEFAULT_REQUEST_CONTENT_TYPE);
+  const [headers, setHeaders] = useState<HeaderRow[]>([]);
+  const [result, setResult] = useState<CallResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
 
-  const url = callUrl(api.proxyUrl, path, query);
-  const canSendBody = method !== "GET";
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement as HTMLElement;
+    dialogRef.current?.focus();
+    return () => previousFocusRef.current?.focus();
+  }, []);
 
-  async function send() {
-    if (!wallet.address) return;
-    setBusy(true);
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !sending) {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])",
+        ) ?? [],
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, sending]);
+
+  function addHeader() {
+    setHeaders((current) => [...current, { id: nextHeaderId.current++, name: "", value: "" }]);
+  }
+
+  function updateHeader(id: number, key: "name" | "value", value: string) {
+    setHeaders((current) =>
+      current.map((header) => (header.id === id ? { ...header, [key]: value } : header)),
+    );
+  }
+
+  async function sendRequest(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setError(null);
     setResult(null);
+    if (!wallet.address) {
+      setError("Connect a Stellar wallet before sending a paid request.");
+      return;
+    }
+
+    let requestHeaders: Record<string, string>;
     try {
-      setResult(
-        await callPaidApi(
-          api.proxyUrl,
-          { method, path, query, body, contentType: "application/json" },
-          wallet.address,
-        ),
-      );
+      const parsed = new Headers();
+      for (const header of headers) {
+        if (header.name.trim()) parsed.set(header.name.trim(), header.value);
+      }
+      requestHeaders = Object.fromEntries(parsed.entries());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The call could not be completed.");
+      setError(err instanceof Error ? err.message : "A request header is invalid.");
+      return;
+    }
+
+    // Checked before paying, so a malformed body never costs a call.
+    const prepared = prepareRequestBody(method, contentType, body, requestHeaders);
+    if (!prepared.ok) {
+      setError(prepared.error);
+      return;
+    }
+
+    setSending(true);
+    try {
+      const response = await callApi(api.proxyUrl, {
+        signer: createFreighterSigner(createWalletSigner(wallet.address, "Test SDF Network ; September 2015")),
+        network: (import.meta.env.VITE_STELLAR_NETWORK === "public" || import.meta.env.VITE_STELLAR_NETWORK === "mainnet" ? "stellar:pubnet" : "stellar:testnet") as "stellar:testnet" | "stellar:pubnet",
+        method,
+        path,
+        body: prepared.body,
+        headers: prepared.headers,
+      });
+      const transaction = response.payment?.transaction;
+      setResult({
+        status: response.status,
+        charged: response.status < 400 && Boolean(response.payment),
+        price: api.price,
+        contentType: response.headers["content-type"] ?? "",
+        body: response.body,
+        explorerUrl: transaction ? explorerTxUrl(transaction) : undefined,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The request failed.");
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   }
 
+  const formattedBody =
+    result === null
+      ? ""
+      : typeof result.body === "string"
+        ? result.body
+        : JSON.stringify(result.body, null, 2);
+
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="try-it-title"
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !sending) onClose();
+      }}
     >
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl dark:bg-gray-800">
-        <div className="mb-4 flex items-start justify-between gap-4">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="try-it-title"
+        tabIndex={-1}
+        className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl outline-none dark:bg-gray-800"
+      >
+        <div className="mb-4 flex items-center justify-between gap-4">
           <div>
             <h2
               id="try-it-title"
               className="text-lg font-semibold text-gray-900 dark:text-gray-100"
             >
-              {api.name}
+              Try {api.name}
             </h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              {api.price} USDC per successful call, paid from your Freighter wallet. Failed calls
-              are not charged.
-            </p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{api.price} USDC per call</p>
           </div>
           <button
-            onClick={onClose}
+            type="button"
             aria-label="Close"
-            className="rounded-lg px-2 py-1 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+            disabled={sending}
+            onClick={onClose}
+            className="rounded p-1 text-gray-500 hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-gray-700"
           >
-            ✕
+            ×
           </button>
         </div>
 
-        <div className="mb-3 flex gap-2">
-          <label className="sr-only" htmlFor="try-method">
-            Method
-          </label>
-          <select
-            id="try-method"
-            value={method}
-            onChange={(e) => setMethod(e.target.value)}
-            className={`${inputClass} w-28 font-mono`}
-          >
-            {api.allowedMethods.map((m) => (
-              <option key={m}>{m}</option>
-            ))}
-          </select>
-          <label className="sr-only" htmlFor="try-path">
-            Path
-          </label>
-          <input
-            id="try-path"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            placeholder="/path/under/the/api"
-            className={`${inputClass} font-mono`}
-          />
-        </div>
-
-        <label
-          className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200"
-          htmlFor="try-query"
-        >
-          Query string
-        </label>
-        <input
-          id="try-query"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="units=metric&lang=en"
-          className={`${inputClass} mb-3 font-mono`}
-        />
-
-        {canSendBody && (
-          <>
-            <label
-              className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200"
-              htmlFor="try-body"
-            >
-              JSON body
+        <form onSubmit={sendRequest} className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[10rem_1fr]">
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              Method
+              <select
+                value={method}
+                onChange={(event) => setMethod(event.target.value as HttpMethod)}
+                className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-900"
+              >
+                {api.allowedMethods.map((allowedMethod) => (
+                  <option key={allowedMethod} value={allowedMethod}>
+                    {allowedMethod}
+                  </option>
+                ))}
+              </select>
             </label>
-            <textarea
-              id="try-body"
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={5}
-              placeholder='{"key": "value"}'
-              className={`${inputClass} mb-3 font-mono`}
-            />
-          </>
-        )}
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              Path and query
+              <input
+                value={path}
+                onChange={(event) => setPath(event.target.value)}
+                required
+                className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono dark:border-gray-600 dark:bg-gray-900"
+                placeholder="/v1/resource"
+              />
+            </label>
+          </div>
 
-        <p className="mb-4 break-all rounded-lg bg-gray-50 px-3 py-2 font-mono text-xs text-gray-600 dark:bg-gray-900 dark:text-gray-300">
-          {method} {url}
-        </p>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+              Request headers
+            </legend>
+            {headers.map((header, index) => (
+              <div key={header.id} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                <label className="sr-only" htmlFor={`try-header-name-${header.id}`}>
+                  Header name {index + 1}
+                </label>
+                <input
+                  id={`try-header-name-${header.id}`}
+                  value={header.name}
+                  onChange={(event) => updateHeader(header.id, "name", event.target.value)}
+                  placeholder="Header name"
+                  className="min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-900"
+                />
+                <label className="sr-only" htmlFor={`try-header-value-${header.id}`}>
+                  Header value {index + 1}
+                </label>
+                <input
+                  id={`try-header-value-${header.id}`}
+                  value={header.value}
+                  onChange={(event) => updateHeader(header.id, "value", event.target.value)}
+                  placeholder="Header value"
+                  className="min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900"
+                />
+                <button
+                  type="button"
+                  aria-label={`Remove header ${index + 1}`}
+                  onClick={() =>
+                    setHeaders((current) => current.filter((item) => item.id !== header.id))
+                  }
+                  className="rounded-lg border border-gray-300 px-3 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={addHeader}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+            >
+              Add header
+            </button>
+          </fieldset>
 
-        {wallet.status !== "connected" ? (
-          <button
-            onClick={wallet.connect}
-            className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-          >
-            Connect Freighter to call this API
-          </button>
-        ) : (
-          <button
-            onClick={send}
-            disabled={busy}
-            className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
-          >
-            {busy ? "Paying and calling…" : `Pay ${api.price} USDC and send`}
-          </button>
-        )}
+          {methodAllowsBody(method) ? (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
+                Content type
+                <select
+                  value={contentType}
+                  onChange={(event) => setContentType(event.target.value as RequestContentType)}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-900 sm:w-64"
+                >
+                  {REQUEST_CONTENT_TYPES.map((type) => (
+                    <option key={type.value} value={type.value}>
+                      {type.label} ({type.value})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
+                Request body
+                <textarea
+                  value={body}
+                  onChange={(event) => setBody(event.target.value)}
+                  rows={5}
+                  aria-describedby="try-body-hint"
+                  className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-900"
+                  placeholder={BODY_PLACEHOLDERS[contentType]}
+                />
+              </label>
+              <p id="try-body-hint" className="text-xs text-gray-500 dark:text-gray-400">
+                Sent exactly as typed. A Content-Type set under request headers overrides this
+                choice. Leave empty to send no body.
+              </p>
+            </div>
+          ) : (
+            <p className="rounded-lg bg-gray-50 p-3 text-sm text-gray-600 dark:bg-gray-900 dark:text-gray-300">
+              GET requests are sent without a body. Put parameters in the path and query.
+            </p>
+          )}
 
-        {error && (
-          <p
-            role="alert"
-            className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300"
-          >
-            {error}
-          </p>
-        )}
+          {wallet.status !== "connected" && (
+            <div className="flex items-center justify-between gap-3 text-sm text-amber-700 dark:text-amber-300">
+              <span>{wallet.error ?? "Connect your Stellar wallet to pay for this call."}</span>
+              <button type="button" onClick={() => void wallet.connect()} className="underline">
+                Connect wallet
+              </button>
+            </div>
+          )}
+
+          {error && (
+            <p
+              role="alert"
+              className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+            >
+              {error}
+            </p>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={sending}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-60"
+            >
+              {sending ? "Sending…" : "Send request"}
+            </button>
+          </div>
+        </form>
 
         {result && (
-          <div className="mt-4">
-            <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
+          <section
+            aria-label="Response"
+            className="mt-5 space-y-3 border-t border-gray-200 pt-4 dark:border-gray-700"
+          >
+            <div className="flex flex-wrap items-center gap-3">
               <span
-                className={`rounded px-2 py-0.5 font-mono font-semibold ${
-                  result.charged
-                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                className={`rounded px-2 py-1 text-sm font-semibold ${
+                  result.status < 400
+                    ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
                     : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
                 }`}
               >
                 {result.status}
               </span>
-              <span className="text-gray-600 dark:text-gray-300">
-                {result.charged ? `Charged ${api.price} USDC` : "Not charged"} · {result.durationMs}{" "}
-                ms
+              <span className="text-sm text-gray-600 dark:text-gray-300">
+                {result.charged ? `Charged ${result.price} USDC` : "Not charged"}
               </span>
               {result.explorerUrl && (
                 <a
                   href={result.explorerUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-indigo-600 underline hover:no-underline dark:text-indigo-400"
+                  className="text-sm text-indigo-600 underline dark:text-indigo-400"
                 >
-                  View payment
+                  View transaction in explorer
                 </a>
               )}
             </div>
-            <pre className="max-h-80 overflow-auto rounded-lg bg-gray-900 p-3 text-xs text-gray-100">
-              {prettyBody(result) || "(empty body)"}
+            <pre className="max-h-80 overflow-auto rounded-lg bg-gray-100 p-3 text-xs text-gray-800 dark:bg-gray-900 dark:text-gray-100">
+              {formattedBody}
             </pre>
-          </div>
+          </section>
         )}
       </div>
     </div>

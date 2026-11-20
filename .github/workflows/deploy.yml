@@ -72,6 +72,27 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'production' }}
     steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL secret is not set in the ${{ github.event.inputs.environment || 'production' }} environment."
+            exit 1
+          fi
+          pnpm db:migrate
+
       - name: Trigger server deploy
         env:
           DEPLOY_HOOK: ${{ secrets.SERVER_DEPLOY_HOOK }}
@@ -151,6 +172,77 @@ jobs:
           echo "::error::Smoke check failed: $SERVER_URL/health did not return 200"
           cat /tmp/health.json 2>/dev/null || true
           exit 1
+
+      - name: Check API catalog and payment challenge
+        env:
+          SERVER_URL: ${{ vars.SERVER_URL }}
+        run: |
+          if [ -z "$SERVER_URL" ]; then
+            echo "::error::SERVER_URL variable is not set in the environment."
+            exit 1
+          fi
+
+          CATALOG_STATUS=$(curl -sS -o /tmp/apis.json -w "%{http_code}" \
+            --max-time 15 "$SERVER_URL/apis")
+          if [ "$CATALOG_STATUS" != "200" ]; then
+            echo "::error::API catalog smoke check failed: HTTP $CATALOG_STATUS"
+            cat /tmp/apis.json
+            exit 1
+          fi
+
+          API_AND_METHOD=$(node -e '
+            const payload = JSON.parse(require("node:fs").readFileSync("/tmp/apis.json", "utf8"));
+            const apis = Array.isArray(payload) ? payload : payload?.items;
+            if (!Array.isArray(apis)) {
+              console.error("GET /apis did not return an API list.");
+              process.exit(1);
+            }
+            const api = apis.find((entry) => entry && entry.id &&
+              (entry.allowedMethods ?? ["GET"]).some((method) => method.toUpperCase() === "GET"))
+              ?? apis.find((entry) => entry && entry.id && entry.allowedMethods?.length);
+            if (!api) {
+              console.error("No listed API supports a smoke-test request.");
+              process.exit(1);
+            }
+            const method = (api.allowedMethods ?? ["GET"])[0].toUpperCase();
+            process.stdout.write(`${api.id}\t${method}`);
+          ')
+          API_ID=${API_AND_METHOD%%$'\t'*}
+          API_METHOD=${API_AND_METHOD#*$'\t'}
+
+          PAYMENT_STATUS=$(curl -sS -D /tmp/proxy-headers.txt -o /tmp/proxy-body.txt \
+            -w "%{http_code}" --max-time 15 -X "$API_METHOD" "$SERVER_URL/api/$API_ID")
+          if [ "$PAYMENT_STATUS" != "402" ]; then
+            echo "::error::Unpaid proxy smoke check expected HTTP 402, got HTTP $PAYMENT_STATUS"
+            cat /tmp/proxy-body.txt
+            exit 1
+          fi
+
+          PAYMENT_REQUIRED=$(awk 'tolower($1) == "payment-required:" { sub(/^[^:]*:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit }' /tmp/proxy-headers.txt)
+          if [ -z "$PAYMENT_REQUIRED" ] || ! node -e '
+            try {
+              const challenge = JSON.parse(Buffer.from(process.argv[1], "base64").toString("utf8"));
+              if (!Number.isInteger(challenge.x402Version) ||
+                  !Array.isArray(challenge.accepts) ||
+                  !challenge.accepts.some((requirement) =>
+                    typeof requirement?.scheme === "string" &&
+                    typeof requirement?.network === "string" &&
+                    typeof requirement?.asset === "string" &&
+                    typeof requirement?.payTo === "string" &&
+                    (typeof requirement?.amount === "string" ||
+                     typeof requirement?.maxAmountRequired === "string")
+                  )) {
+                process.exit(1);
+              }
+            } catch {
+              process.exit(1);
+            }
+          ' "$PAYMENT_REQUIRED"; then
+            echo "::error::Unpaid proxy response did not contain a valid PAYMENT-REQUIRED challenge."
+            cat /tmp/proxy-headers.txt
+            exit 1
+          fi
+          echo "API catalog and unpaid proxy payment challenge checks passed."
 
       - name: Check web availability
         env:

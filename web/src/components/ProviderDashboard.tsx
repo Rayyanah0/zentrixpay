@@ -14,8 +14,13 @@ import {
 import { useAsync } from "../hooks/useAsync.js";
 import type { WalletState } from "../hooks/useWalletConnection.js";
 import { ErrorBanner } from "./ErrorBanner.js";
-
-const KEY_STORAGE = "zentrixpay-provider-api-key";
+import { STATS_PAGE_SIZE, buildStatsRange } from "../lib/statsRange.js";
+import {
+  clearProviderKey,
+  isProviderKeyRemembered,
+  readProviderKey,
+  saveProviderKey,
+} from "../lib/providerKeyStorage.js";
 
 const inputClass =
   "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100";
@@ -25,23 +30,6 @@ const secondaryButton =
   "rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-60 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700";
 const card =
   "rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800";
-
-function readStoredKey(): string {
-  try {
-    return localStorage.getItem(KEY_STORAGE) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function storeKey(key: string | null): void {
-  try {
-    if (key) localStorage.setItem(KEY_STORAGE, key);
-    else localStorage.removeItem(KEY_STORAGE);
-  } catch {
-    // Storage unavailable (private mode): the key just won't survive a reload.
-  }
-}
 
 function Field({
   label,
@@ -70,11 +58,51 @@ function Field({
 
 // ── Getting an API key ───────────────────────────────────────────────────────
 
-function ProviderAccess({ wallet, onKey }: { wallet: WalletState; onKey: (key: string) => void }) {
+/** Opt-in to keep the key across browser sessions; session-only by default. */
+function RememberKeyOption({
+  id,
+  checked,
+  onChange,
+}: {
+  id: string;
+  checked: boolean;
+  onChange: (remember: boolean) => void;
+}) {
+  return (
+    <div className="mb-4">
+      <label
+        htmlFor={id}
+        className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200"
+      >
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          aria-describedby={`${id}-hint`}
+        />
+        Remember this key on this device
+      </label>
+      <p id={`${id}-hint`} className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+        By default the key is kept only for this browser tab and forgotten when it closes. Only
+        tick this on a device you trust — a remembered key stays until you sign out.
+      </p>
+    </div>
+  );
+}
+
+function ProviderAccess({
+  wallet,
+  onKey,
+}: {
+  wallet: WalletState;
+  onKey: (key: string, remember: boolean) => void;
+}) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [walletAddress, setWalletAddress] = useState(wallet.address ?? "");
   const [pasted, setPasted] = useState("");
+  const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newKey, setNewKey] = useState<string | null>(null);
@@ -109,7 +137,8 @@ function ProviderAccess({ wallet, onKey }: { wallet: WalletState; onKey: (key: s
         <code className="mb-4 block break-all rounded-lg bg-gray-100 p-3 text-xs dark:bg-gray-900 dark:text-gray-100">
           {newKey}
         </code>
-        <button className={primaryButton} onClick={() => onKey(newKey)}>
+        <RememberKeyOption id="remember-new-key" checked={remember} onChange={setRemember} />
+        <button className={primaryButton} onClick={() => onKey(newKey, remember)}>
           I saved it — continue
         </button>
       </div>
@@ -170,7 +199,7 @@ function ProviderAccess({ wallet, onKey }: { wallet: WalletState; onKey: (key: s
         className={card}
         onSubmit={(e) => {
           e.preventDefault();
-          if (pasted.trim()) onKey(pasted.trim());
+          if (pasted.trim()) onKey(pasted.trim(), remember);
         }}
       >
         <h3 className="mb-1 font-semibold text-gray-900 dark:text-gray-100">Already a provider?</h3>
@@ -186,6 +215,7 @@ function ProviderAccess({ wallet, onKey }: { wallet: WalletState; onKey: (key: s
             className={`${inputClass} font-mono`}
           />
         </Field>
+        <RememberKeyOption id="remember-pasted-key" checked={remember} onChange={setRemember} />
         <button className={primaryButton}>Open dashboard</button>
       </form>
     </div>
@@ -353,9 +383,172 @@ function NewApiForm({ apiKey, onCreated }: { apiKey: string; onCreated: () => vo
   );
 }
 
+// ── Ownership verification instructions ─────────────────────────────────────
+
+function CopyButton({
+  text,
+  label,
+  onCopy,
+}: {
+  text: string;
+  label: string;
+  onCopy: (t: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="ml-1 text-xs text-indigo-600 underline dark:text-indigo-400"
+      onClick={() => onCopy(text)}
+      aria-label={`Copy ${label}`}
+    >
+      copy
+    </button>
+  );
+}
+
+function downloadTxt(content: string) {
+  const blob = new Blob([content], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "zentrixpay.txt";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function OwnershipInstructions({
+  api,
+  busy,
+  onVerify,
+  onCopy,
+}: {
+  api: OwnerApi;
+  busy: string | null;
+  onVerify: () => void;
+  onCopy: (text: string) => void;
+}) {
+  const { url, expectedContent } = api.ownershipVerification;
+  const [showSnippets, setShowSnippets] = useState(false);
+
+  const nginxSnippet = `location = /.well-known/zentrixpay.txt {
+  add_header Content-Type text/plain;
+  return 200 "${expectedContent}";
+}`;
+
+  const expressSnippet = `app.get('/.well-known/zentrixpay.txt', (_req, res) => {
+  res.type('text/plain').send('${expectedContent}');
+});`;
+
+  const vercelJson = `{
+  "headers": [
+    {
+      "source": "/.well-known/(.*)",
+      "headers": [{ "key": "Content-Type", "value": "text/plain" }]
+    }
+  ]
+}`;
+
+  return (
+    <div className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">
+      <p className="mb-2 font-medium">Verify ownership to list this API</p>
+      <p className="mb-1">Serve the file below at:</p>
+      <p className="mb-2 flex flex-wrap items-center gap-1 break-all font-mono text-xs">
+        {url}
+        <CopyButton text={url} label="verification URL" onCopy={onCopy} />
+      </p>
+
+      <p className="mb-1">File contents (one line):</p>
+      <div className="mb-2 flex flex-wrap items-start gap-2">
+        <code className="flex-1 break-all rounded bg-white/70 p-2 text-xs dark:bg-black/30">
+          {expectedContent}
+        </code>
+        <div className="flex shrink-0 flex-col gap-1">
+          <CopyButton text={expectedContent} label="verification token" onCopy={onCopy} />
+          <button
+            type="button"
+            className="text-xs text-indigo-600 underline dark:text-indigo-400"
+            onClick={() => downloadTxt(expectedContent)}
+          >
+            download
+          </button>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        className="mb-3 text-xs text-indigo-600 underline dark:text-indigo-400"
+        onClick={() => setShowSnippets((v) => !v)}
+      >
+        {showSnippets ? "Hide server snippets" : "Show server snippets"}
+      </button>
+
+      {showSnippets && (
+        <div className="mb-3 flex flex-col gap-3">
+          {/* nginx */}
+          <div>
+            <p className="mb-1 font-medium">nginx</p>
+            <div className="flex items-start gap-2">
+              <pre className="flex-1 overflow-x-auto rounded bg-white/70 p-2 text-xs dark:bg-black/30">
+                {nginxSnippet}
+              </pre>
+              <CopyButton text={nginxSnippet} label="nginx snippet" onCopy={onCopy} />
+            </div>
+          </div>
+
+          {/* Express */}
+          <div>
+            <p className="mb-1 font-medium">Express / Node</p>
+            <div className="flex items-start gap-2">
+              <pre className="flex-1 overflow-x-auto rounded bg-white/70 p-2 text-xs dark:bg-black/30">
+                {expressSnippet}
+              </pre>
+              <CopyButton text={expressSnippet} label="Express snippet" onCopy={onCopy} />
+            </div>
+          </div>
+
+          {/* Vercel */}
+          <div>
+            <p className="mb-1 font-medium">
+              Vercel — put the token in <code>public/.well-known/zentrixpay.txt</code>
+            </p>
+            <div className="flex items-start gap-2">
+              <pre className="flex-1 overflow-x-auto rounded bg-white/70 p-2 text-xs dark:bg-black/30">
+                {expectedContent}
+              </pre>
+              <div className="flex shrink-0 flex-col gap-1">
+                <CopyButton text={expectedContent} label="Vercel file content" onCopy={onCopy} />
+                <button
+                  type="button"
+                  className="text-xs text-indigo-600 underline dark:text-indigo-400"
+                  onClick={() => downloadTxt(expectedContent)}
+                >
+                  download
+                </button>
+              </div>
+            </div>
+            <p className="mt-1 text-xs">
+              If serving via rewrites, add to <code>vercel.json</code>:
+            </p>
+            <div className="mt-1 flex items-start gap-2">
+              <pre className="flex-1 overflow-x-auto rounded bg-white/70 p-2 text-xs dark:bg-black/30">
+                {vercelJson}
+              </pre>
+              <CopyButton text={vercelJson} label="vercel.json snippet" onCopy={onCopy} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button className={secondaryButton} disabled={busy !== null} onClick={onVerify}>
+        {busy === "Verify" ? "Checking…" : "Verify ownership"}
+      </button>
+    </div>
+  );
+}
+
 // ── Managing one API ─────────────────────────────────────────────────────────
 
-function StatsPanel({ stats }: { stats: ApiStats }) {
+function StatsView({ stats }: { stats: ApiStats }) {
   const tiles = [
     ["Revenue", `${stats.revenue} USDC`],
     ["Paid calls", String(stats.chargedCalls)],
@@ -364,7 +557,7 @@ function StatsPanel({ stats }: { stats: ApiStats }) {
     ["Avg latency", `${stats.avgDurationMs} ms`],
   ];
   return (
-    <div className="mt-4">
+    <div>
       <dl className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
         {tiles.map(([label, value]) => (
           <div key={label} className="rounded-lg bg-gray-50 p-2 dark:bg-gray-900">
@@ -403,6 +596,139 @@ function StatsPanel({ stats }: { stats: ApiStats }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Stats with a date range and paged call history (#143). The same window is
+ * sent for the totals and the call list, so they always agree.
+ */
+export function StatsPanel({
+  apiKey,
+  apiId,
+  initial,
+}: {
+  apiKey: string;
+  apiId: string;
+  initial: ApiStats;
+}) {
+  const [stats, setStats] = useState(initial);
+  const [fromDay, setFromDay] = useState("");
+  const [toDay, setToDay] = useState("");
+  const [applied, setApplied] = useState<{ from?: string; to?: string }>({});
+  const [offset, setOffset] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load(range: { from?: string; to?: string }, nextOffset: number) {
+    setBusy(true);
+    setError(null);
+    try {
+      setStats(
+        await fetchApiStats(apiKey, apiId, {
+          ...range,
+          limit: STATS_PAGE_SIZE,
+          offset: nextOffset,
+        }),
+      );
+      setApplied(range);
+      setOffset(nextOffset);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function apply(e: React.FormEvent) {
+    e.preventDefault();
+    const range = buildStatsRange(fromDay, toDay);
+    if (!range.ok) {
+      setError(range.error);
+      return;
+    }
+    void load({ from: range.from, to: range.to }, 0);
+  }
+
+  const total = stats.pagination?.total ?? stats.calls;
+  const hasMore = stats.pagination?.hasMore ?? false;
+  const shown = stats.recentCalls.length;
+
+  return (
+    <div className="mt-4">
+      <form
+        onSubmit={apply}
+        className="mb-3 flex flex-wrap items-end gap-2"
+        aria-label="Stats date range"
+      >
+        <label className="text-xs text-gray-500 dark:text-gray-400">
+          From
+          <input
+            type="date"
+            className={inputClass}
+            value={fromDay}
+            onChange={(e) => setFromDay(e.target.value)}
+          />
+        </label>
+        <label className="text-xs text-gray-500 dark:text-gray-400">
+          To
+          <input
+            type="date"
+            className={inputClass}
+            value={toDay}
+            onChange={(e) => setToDay(e.target.value)}
+          />
+        </label>
+        <button type="submit" className={secondaryButton} disabled={busy}>
+          {busy ? "Loading…" : "Apply"}
+        </button>
+        {(applied.from || applied.to) && (
+          <button
+            type="button"
+            className={secondaryButton}
+            disabled={busy}
+            onClick={() => {
+              setFromDay("");
+              setToDay("");
+              void load({}, 0);
+            }}
+          >
+            All time
+          </button>
+        )}
+      </form>
+      {error && (
+        <p role="alert" className="mb-2 text-sm text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      )}
+      <StatsView stats={stats} />
+      {total > 0 && (
+        <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+          <span>
+            {shown === 0
+              ? `No calls on this page (of ${total})`
+              : `Calls ${offset + 1}–${offset + shown} of ${total}`}
+          </span>
+          <button
+            type="button"
+            className={secondaryButton}
+            disabled={busy || offset === 0}
+            onClick={() => void load(applied, Math.max(0, offset - STATS_PAGE_SIZE))}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className={secondaryButton}
+            disabled={busy || !hasMore}
+            onClick={() => void load(applied, offset + STATS_PAGE_SIZE)}
+          >
+            Next
+          </button>
         </div>
       )}
     </div>
@@ -490,20 +816,12 @@ function ApiCard({
       </dl>
 
       {!api.ownershipVerified && (
-        <div className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">
-          <p className="mb-1">To list this API, serve this line at</p>
-          <p className="mb-1 break-all font-mono text-xs">{api.ownershipVerification.url}</p>
-          <code className="mb-2 block break-all rounded bg-white/70 p-2 text-xs dark:bg-black/30">
-            {api.ownershipVerification.expectedContent}
-          </code>
-          <button
-            className={secondaryButton}
-            disabled={busy !== null}
-            onClick={() => run("Verify", () => verifyApiOwnership(apiKey, api.id))}
-          >
-            {busy === "Verify" ? "Checking…" : "Verify ownership"}
-          </button>
-        </div>
+        <OwnershipInstructions
+          api={api}
+          busy={busy}
+          onVerify={() => run("Verify", () => verifyApiOwnership(apiKey, api.id))}
+          onCopy={onCopy}
+        />
       )}
 
       <div className="flex flex-wrap items-end gap-2">
@@ -545,7 +863,7 @@ function ApiCard({
             stats
               ? setStats(null)
               : run("Stats", async () => {
-                  setStats(await fetchApiStats(apiKey, api.id));
+                  setStats(await fetchApiStats(apiKey, api.id, { limit: STATS_PAGE_SIZE }));
                 })
           }
         >
@@ -558,7 +876,7 @@ function ApiCard({
           {error}
         </p>
       )}
-      {stats && <StatsPanel stats={stats} />}
+      {stats && <StatsPanel apiKey={apiKey} apiId={api.id} initial={stats} />}
     </li>
   );
 }
@@ -572,7 +890,8 @@ export function ProviderDashboard({
   wallet: WalletState;
   onCopy: (text: string) => void;
 }) {
-  const [apiKey, setApiKey] = useState(readStoredKey);
+  const [apiKey, setApiKey] = useState(readProviderKey);
+  const [remembered, setRemembered] = useState(isProviderKeyRemembered);
   const [showForm, setShowForm] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [local, setLocal] = useState<Record<string, OwnerApi>>({});
@@ -582,9 +901,12 @@ export function ProviderDashboard({
     [apiKey, refresh],
   );
 
-  function changeKey(key: string | null) {
-    storeKey(key);
+  function changeKey(key: string | null, remember = false) {
+    if (key) saveProviderKey(key, remember);
+    else clearProviderKey();
     setApiKey(key ?? "");
+    setRemembered(Boolean(key) && remember);
+    setShowForm(false);
     setLocal({});
   }
 
@@ -601,6 +923,11 @@ export function ProviderDashboard({
         >
           Your APIs
         </h2>
+        <p className="w-full text-xs text-gray-500 dark:text-gray-400 sm:order-last">
+          {remembered
+            ? "Your API key is remembered on this device until you sign out."
+            : "Your API key is kept for this browser tab only."}
+        </p>
         <div className="flex gap-2">
           <button className={primaryButton} onClick={() => setShowForm((v) => !v)}>
             {showForm ? "Cancel" : "Register an API"}

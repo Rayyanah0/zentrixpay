@@ -11,8 +11,15 @@ import { rootLogger } from "./lib/logger.js";
 import { beginShutdown, whenDrained, inFlightCount } from "./lib/lifecycle.js";
 import { pgClient } from "./db/client.js";
 import { startPoolMetrics, stopPoolMetrics } from "./db/client.js";
-import { startRetryPendingWorker, stopRetryPendingWorker } from "./workers/retryPendingWorker.js";
-import { startEventListener, stopEventListener } from "./workers/eventListener.js";
+import { startHealthCheckWorker, stopHealthCheckWorker } from "./workers/healthCheckWorker.js";
+import {
+  startApiCallRetentionWorker,
+  stopApiCallRetentionWorker,
+} from "./workers/apiCallRetentionWorker.js";
+import {
+  startApiCallRecoveryWorker,
+  stopApiCallRecoveryWorker,
+} from "./workers/apiCallRecoveryWorker.js";
 import { closeRateLimitStore } from "./lib/rateLimit/index.js";
 
 initSentry();
@@ -30,8 +37,9 @@ const server: Server = app.listen(config.PORT, () => {
     "ZentrixPay server started",
   );
 
-  startRetryPendingWorker();
-  startEventListener();
+  startHealthCheckWorker();
+  startApiCallRetentionWorker();
+  startApiCallRecoveryWorker();
   startPoolMetrics();
 });
 
@@ -41,8 +49,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  stopRetryPendingWorker();
-  stopEventListener();
+  stopHealthCheckWorker();
+  stopApiCallRetentionWorker();
+  stopApiCallRecoveryWorker();
   stopPoolMetrics();
 
   // Stop passing readiness checks so load balancers drain us before we close.

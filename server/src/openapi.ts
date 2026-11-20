@@ -1,25 +1,147 @@
 /**
- * OpenAPI 3.0 specification for the ZentrixPay server.
- * Served as JSON at GET /openapi.json and browsable via Swagger UI at GET /docs.
+ * OpenAPI 3.0 document for the pay-per-call gateway, served at /openapi.json
+ * and rendered by Swagger UI at /docs.
+ *
+ * Covers the public API catalog, publisher registration and API management,
+ * usage statistics, payer receipts and the x402-metered proxy. Keep it in step
+ * with routes/apis.ts and routes/publishers.ts — openapi.test.ts checks that
+ * the key routes are present.
  */
-export const openApiSpec = {
+
+type Json = Record<string, unknown>;
+
+export interface OpenApiDocument {
+  openapi: string;
+  info: { title: string; version: string; description?: string };
+  servers?: Array<{ url: string; description?: string }>;
+  tags?: Array<{ name: string; description?: string }>;
+  components: {
+    securitySchemes: Record<string, Json>;
+    schemas: Record<string, Json>;
+    parameters: Record<string, Json>;
+    headers: Record<string, Json>;
+    responses: Record<string, Json>;
+  };
+  paths: Record<string, Record<string, Json | Json[]>>;
+}
+
+const ref = (kind: string, name: string) => ({ $ref: `#/components/${kind}/${name}` });
+const schemaRef = (name: string) => ref("schemas", name);
+const responseRef = (name: string) => ref("responses", name);
+const paramRef = (name: string) => ref("parameters", name);
+const headerRef = (name: string) => ref("headers", name);
+
+const json = (schema: Json) => ({ "application/json": { schema } });
+
+const usdcAmount = {
+  type: "string",
+  pattern: "^\\d+(\\.\\d{1,7})?$",
+  description: "USDC amount as a decimal string (up to 7 decimal places).",
+  example: "0.01",
+};
+
+const stellarAddress = {
+  type: "string",
+  pattern: "^G[A-Z2-7]{55}$",
+  description: "Stellar public key (G...).",
+  example: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H",
+};
+
+const PROXY_METHODS = ["get", "post", "put", "patch", "delete"] as const;
+
+const rateLimitHeaders = {
+  "RateLimit-Limit": headerRef("RateLimitLimit"),
+  "RateLimit-Remaining": headerRef("RateLimitRemaining"),
+  "RateLimit-Reset": headerRef("RateLimitReset"),
+};
+
+/** One proxied HTTP method on /api/{id} or /api/{id}/{path}. */
+function proxyOperation(method: (typeof PROXY_METHODS)[number], withPath: boolean): Json {
+  const upper = method.toUpperCase();
+  const hasBody = method !== "get" && method !== "delete";
+  return {
+    tags: ["Proxy"],
+    summary: `Paid ${upper} call${withPath ? " to an upstream path" : ""}`,
+    description:
+      `Forwards one ${upper} request to the provider's upstream API, metered with x402. ` +
+      "Without a valid payment the gateway answers 402 with a PAYMENT-REQUIRED header " +
+      "describing what to pay (price in USDC on Stellar, payee wallet, network). Retry the " +
+      "same request with the signed payment in the PAYMENT-SIGNATURE (or legacy X-PAYMENT) " +
+      "header; on success the upstream response is returned with a PAYMENT-RESPONSE header " +
+      "carrying the settlement receipt. Callers are only charged when the final status is " +
+      "below 400, and are never charged for upstream failures (502/504). An active access " +
+      "pass or the provider's daily free-call allowance skips the payment step. The method " +
+      "must be one of the API's allowedMethods, otherwise 405 is returned.",
+    operationId: `proxy${upper[0]}${upper.slice(1).toLowerCase()}${withPath ? "Path" : ""}`,
+    security: [{}, { X402Payment: [] }],
+    parameters: [paramRef("IdempotencyKey")],
+    ...(hasBody
+      ? {
+          requestBody: {
+            required: false,
+            description: "Forwarded to the upstream unchanged (any content type).",
+            content: { "*/*": { schema: { type: "string", format: "binary" } } },
+          },
+        }
+      : {}),
+    responses: {
+      "200": {
+        description:
+          "The upstream response (status, headers and body are passed through; any status " +
+          "below 400 is a charged call).",
+        headers: {
+          "PAYMENT-RESPONSE": headerRef("PaymentResponse"),
+          "Idempotent-Replayed": headerRef("IdempotentReplayed"),
+        },
+        content: { "*/*": { schema: { type: "string", format: "binary" } } },
+      },
+      "400": responseRef("BadRequest"),
+      "402": responseRef("PaymentRequired"),
+      "404": responseRef("NotFound"),
+      "405": responseRef("MethodNotAllowed"),
+      "409": responseRef("IdempotencyConflict"),
+      "422": responseRef("IdempotencyMismatch"),
+      "429": responseRef("TooManyRequests"),
+      "502": responseRef("UpstreamFailed"),
+      "504": responseRef("UpstreamTimeout"),
+    },
+  };
+}
+
+function proxyPathItem(withPath: boolean) {
+  const item: Record<string, Json | Json[]> = {
+    parameters: withPath ? [paramRef("ApiId"), paramRef("UpstreamPath")] : [paramRef("ApiId")],
+  };
+  for (const m of PROXY_METHODS) item[m] = proxyOperation(m, withPath);
+  return item;
+}
+
+export const openApiSpec: OpenApiDocument = {
   openapi: "3.0.3",
   info: {
-    title: "ZentrixPay API",
+    title: "ZentrixPay Gateway API",
     version: "1.0.0",
     description:
-      "A marketplace where humans and AI agents publish and trade digital resources via HTTP 402 payments on Stellar.\n\n" +
-      "**Optional request signatures:** When the server has `REQUIRE_REQUEST_SIGNATURE=true`, publisher mutations (POST/DELETE on `/resources/*`) must include `X-Timestamp` and `X-Signature` headers. See `docs/request-signature.md`.\n\n" +
-      "**Pay-per-call proxy (`ANY /api/{id}/*`):** each call costs the API's `price` in USDC and settles only when the response status is below 400. Allowlists, passes, free quota, credits and price rules are not implemented. See `docs/paid-call-pricing.md` for the full decision order.",
-    license: { name: "MIT" },
+      "ZentrixPay is a pay-per-call API gateway. Providers register as publishers, add " +
+      "their HTTP APIs with a per-call price in USDC, and get a proxy URL. Callers discover " +
+      "APIs in the public catalog and pay for each call through the x402 protocol, settled " +
+      "on Stellar.\n\n" +
+      "**Authentication.** Publisher routes take the `x-api-key` header returned once by " +
+      "`POST /publishers`. When the server enables request signatures, mutating publisher " +
+      "routes also need `X-Timestamp` and `X-Signature` (HMAC-SHA256).\n\n" +
+      "**Pagination.** List endpoints use `limit` / `offset` query parameters.\n\n" +
+      "**Errors.** Errors are JSON objects with an `error` field. Validation errors (400) " +
+      "carry the field-by-field validation result in `error`.\n\n" +
+      "**Pricing.** The order in which allowlists, passes, free quota, credits and price " +
+      "rules are applied to a paid call is documented in `docs/paid-call-pricing.md`.",
   },
   servers: [{ url: "/", description: "Current server" }],
   tags: [
-    { name: "Health", description: "Liveness and readiness probes" },
-    { name: "Publishers", description: "Publisher registration and profile management" },
-    { name: "Resources", description: "Resource publishing, browsing, and access" },
-    { name: "Registry", description: "On-chain Soroban vault-registry" },
-    { name: "Verify", description: "AI content originality verification (x402 paywalled)" },
+    { name: "Catalog", description: "Discover listed APIs (public)." },
+    { name: "Publishers", description: "Publisher registration." },
+    { name: "API management", description: "Create and manage your APIs (publisher)." },
+    { name: "Statistics", description: "Usage, revenue and payer receipts." },
+    { name: "Proxy", description: "x402-metered calls to a provider's API." },
   ],
   components: {
     securitySchemes: {
@@ -27,1019 +149,885 @@ export const openApiSpec = {
         type: "apiKey",
         in: "header",
         name: "x-api-key",
-        description: "Publisher API key returned on registration",
-      },
-      RequestSignature: {
-        type: "apiKey",
-        in: "header",
-        name: "X-Signature",
-        description:
-          "Optional HMAC-SHA256 hex digest over method, path, timestamp, and body (required when REQUIRE_REQUEST_SIGNATURE is enabled). " +
-          "Pair with X-Timestamp (unix seconds). The API key is the HMAC secret. See docs/request-signature.md.",
+        description: "Publisher API key, shown once by POST /publishers.",
       },
       X402Payment: {
         type: "apiKey",
         in: "header",
-        name: "X-Payment",
-        description: "Base64-encoded x402 payment payload",
+        name: "PAYMENT-SIGNATURE",
+        description:
+          "Base64 x402 payment payload answering a 402 challenge. The legacy X-PAYMENT " +
+          "header is also accepted.",
       },
+    },
+    parameters: {
+      ApiId: {
+        name: "id",
+        in: "path",
+        required: true,
+        description: "API identifier.",
+        schema: { type: "string" },
+      },
+      UpstreamPath: {
+        name: "path",
+        in: "path",
+        required: true,
+        description:
+          "Path appended to the API's upstream URL (may contain several segments). The query " +
+          "string is forwarded too. `.` / `..` segments are rejected.",
+        schema: { type: "string" },
+      },
+      Limit: {
+        name: "limit",
+        in: "query",
+        required: false,
+        description: "Page size.",
+        schema: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+      },
+      Offset: {
+        name: "offset",
+        in: "query",
+        required: false,
+        description: "Number of items to skip.",
+        schema: { type: "integer", minimum: 0, default: 0 },
+      },
+      IdempotencyKey: {
+        name: "Idempotency-Key",
+        in: "header",
+        required: false,
+        description:
+          "Optional key (max 255 chars), scoped per API and payer wallet. Retrying a charged " +
+          "call with the same key and payment replays the stored response instead of calling " +
+          "the upstream again.",
+        schema: { type: "string", maxLength: 255 },
+      },
+      RequestTimestamp: {
+        name: "X-Timestamp",
+        in: "header",
+        required: false,
+        description: "Unix time in ms. Required when request signatures are enabled.",
+        schema: { type: "string" },
+      },
+      RequestSignature: {
+        name: "X-Signature",
+        in: "header",
+        required: false,
+        description: "HMAC-SHA256 request signature. Required when request signatures are enabled.",
+        schema: { type: "string" },
+      },
+    },
+    headers: {
+      PaymentRequired: {
+        description: "Base64-encoded x402 payment requirements (price, payee, network, asset).",
+        schema: { type: "string" },
+      },
+      PaymentResponse: {
+        description: "Base64-encoded x402 settlement receipt, including the transaction hash.",
+        schema: { type: "string" },
+      },
+      IdempotentReplayed: {
+        description: "`true` when the response was replayed for a repeated Idempotency-Key.",
+        schema: { type: "string", enum: ["true"] },
+      },
+      RateLimitLimit: { description: "Requests allowed per window.", schema: { type: "integer" } },
+      RateLimitRemaining: {
+        description: "Requests left in the current window.",
+        schema: { type: "integer" },
+      },
+      RateLimitReset: {
+        description: "Unix time (seconds) when the window frees up.",
+        schema: { type: "integer" },
+      },
+      RetryAfter: { description: "Seconds to wait before retrying.", schema: { type: "integer" } },
     },
     schemas: {
       Error: {
         type: "object",
-        properties: {
-          error: { type: "string", example: "Resource not found" },
-        },
         required: ["error"],
+        properties: {
+          error: {
+            description: "Error message, or the validation result for 400 responses.",
+            oneOf: [{ type: "string" }, { type: "object", additionalProperties: true }],
+          },
+        },
       },
       RateLimitError: {
         type: "object",
+        required: ["error", "code", "retryAfterSeconds"],
         properties: {
           error: { type: "string", example: "Too many requests" },
-          code: { type: "string", example: "RATE_LIMITED" },
-          retryAfterSeconds: { type: "integer", example: 60 },
-        },
-        required: ["error", "code", "retryAfterSeconds"],
-      },
-      HealthResponse: {
-        type: "object",
-        properties: {
-          status: { type: "string", example: "ok" },
-          service: { type: "string", example: "zentrixpay" },
-          timestamp: { type: "string", format: "date-time" },
+          code: { type: "string", enum: ["RATE_LIMITED"] },
+          retryAfterSeconds: { type: "integer" },
         },
       },
-      ReadinessResponse: {
+      UpstreamError: {
         type: "object",
+        required: ["error", "reason"],
         properties: {
-          status: { type: "string", enum: ["ok", "degraded", "unavailable"] },
-          service: { type: "string", example: "zentrixpay" },
-          checks: {
+          error: { type: "string", enum: ["upstream_failed"] },
+          reason: { type: "string", enum: ["blocked", "network", "too_large", "timeout"] },
+        },
+      },
+      HttpMethod: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+      PublicApi: {
+        type: "object",
+        description: "What anyone can see about a listed API.",
+        required: [
+          "id",
+          "name",
+          "price",
+          "currency",
+          "walletAddress",
+          "allowedMethods",
+          "tags",
+          "proxyUrl",
+          "onchain",
+          "createdAt",
+        ],
+        properties: {
+          id: { type: "string" },
+          name: { type: "string" },
+          description: { type: "string", nullable: true },
+          price: { ...usdcAmount, description: "Price per call in USDC." },
+          currency: { type: "string", enum: ["USDC"] },
+          walletAddress: { ...stellarAddress, description: "Payee wallet." },
+          allowedMethods: { type: "array", items: schemaRef("HttpMethod") },
+          tags: { type: "array", items: { type: "string" } },
+          passPrice: {
+            ...usdcAmount,
+            nullable: true,
+            description: "Price of a 1-hour access pass, or null if passes are not offered.",
+          },
+          freeCallsPerDay: {
+            type: "integer",
+            description: "Free calls per payer per UTC day before payment is required.",
+          },
+          proxyUrl: {
+            type: "string",
+            format: "uri",
+            description: "Call this URL (plus any upstream path) to use the API.",
+          },
+          openapiUrl: {
+            type: "string",
+            format: "uri",
+            nullable: true,
+            description: "The API's own OpenAPI document, if the provider uploaded one.",
+          },
+          onchain: {
             type: "object",
             properties: {
-              database: { type: "string", enum: ["ok", "error"] },
-              sorobanRpc: { type: "string", enum: ["ok", "error"] },
+              registered: { type: "boolean" },
+              contractId: { type: "string", nullable: true },
+              txHash: { type: "string", nullable: true },
             },
           },
-          timestamp: { type: "string", format: "date-time" },
+          createdAt: { type: "string", format: "date-time" },
         },
       },
-      Publisher: {
+      OwnerApi: {
+        description:
+          "What the owning publisher sees. Includes the upstream URL but never secret values.",
+        allOf: [
+          schemaRef("PublicApi"),
+          {
+            type: "object",
+            properties: {
+              upstreamUrl: { type: "string", format: "uri" },
+              upstreamHeaderName: { type: "string", nullable: true },
+              hasUpstreamSecret: { type: "boolean" },
+              upstreamQueryParamName: { type: "string", nullable: true },
+              hasUpstreamQuerySecret: { type: "boolean" },
+              timeoutMs: { type: "integer", nullable: true },
+              payerAllowlist: {
+                type: "array",
+                nullable: true,
+                items: stellarAddress,
+              },
+              payerDenylist: { type: "array", items: stellarAddress },
+              listed: { type: "boolean" },
+              onchainStatus: { type: "string" },
+              ownershipVerified: { type: "boolean" },
+              ownershipVerification: {
+                type: "object",
+                description: "Serve expectedContent at url to prove you own the upstream.",
+                properties: {
+                  url: { type: "string", format: "uri" },
+                  expectedContent: { type: "string" },
+                },
+              },
+            },
+          },
+        ],
+      },
+      CreatedApi: {
+        allOf: [
+          schemaRef("OwnerApi"),
+          {
+            type: "object",
+            properties: {
+              nextStep: { type: "string", description: "What to do to get the API listed." },
+            },
+          },
+        ],
+      },
+      UpstreamHeader: {
         type: "object",
+        required: ["name", "value"],
+        additionalProperties: false,
+        description: "Secret header added to every forwarded call. Stored encrypted.",
+        properties: {
+          name: { type: "string", example: "x-api-key" },
+          value: { type: "string", maxLength: 4096 },
+        },
+      },
+      UpstreamQueryParam: {
+        type: "object",
+        required: ["name", "value"],
+        additionalProperties: false,
+        description: "Secret query parameter added to every forwarded call. Stored encrypted.",
+        properties: {
+          name: { type: "string", maxLength: 128 },
+          value: { type: "string", maxLength: 4096 },
+        },
+      },
+      Webhook: {
+        type: "object",
+        required: ["url", "secret"],
+        additionalProperties: false,
+        description: "Receives an HMAC-SHA256 signed event for every charged call.",
+        properties: {
+          url: { type: "string", format: "uri" },
+          secret: { type: "string", minLength: 16, maxLength: 256 },
+        },
+      },
+      CreateApiRequest: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "upstreamUrl", "price"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 120 },
+          description: { type: "string", maxLength: 2000 },
+          upstreamUrl: {
+            type: "string",
+            format: "uri",
+            description: "Your API's base URL. Must be public; callers never see it.",
+          },
+          price: usdcAmount,
+          walletAddress: {
+            ...stellarAddress,
+            description: "Payee wallet. Defaults to the publisher's wallet.",
+          },
+          allowedMethods: {
+            type: "array",
+            minItems: 1,
+            items: schemaRef("HttpMethod"),
+            default: ["GET"],
+          },
+          upstreamHeader: schemaRef("UpstreamHeader"),
+          upstreamQueryParam: schemaRef("UpstreamQueryParam"),
+          openapiSpec: {
+            description: "Your API's OpenAPI 3 document (JSON/YAML text or a JSON object).",
+            oneOf: [{ type: "string" }, { type: "object", additionalProperties: true }],
+          },
+          timeoutMs: { type: "integer", minimum: 1000 },
+          maxResponseBytes: { type: "integer", minimum: 1024 },
+          webhook: schemaRef("Webhook"),
+          healthPath: {
+            type: "string",
+            maxLength: 512,
+            pattern: "^/[^\\s#]*$",
+            description: "Path pinged to check the upstream is up.",
+          },
+          tags: { type: "array", maxItems: 10, items: { type: "string", maxLength: 32 } },
+          payerAllowlist: {
+            type: "array",
+            maxItems: 500,
+            items: stellarAddress,
+            description: "Only these wallets may call the API. Omit to allow everyone.",
+          },
+          payerDenylist: { type: "array", maxItems: 500, items: stellarAddress },
+        },
+      },
+      UpdateApiRequest: {
+        type: "object",
+        additionalProperties: false,
+        description:
+          "Every field is optional; send null to clear a nullable setting. Changing " +
+          "walletAddress also needs X-Payee-Timestamp and X-Payee-Signature from the current " +
+          "payee wallet.",
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 120 },
+          description: { type: "string", maxLength: 2000, nullable: true },
+          upstreamUrl: { type: "string", format: "uri" },
+          price: usdcAmount,
+          walletAddress: stellarAddress,
+          allowedMethods: { type: "array", minItems: 1, items: schemaRef("HttpMethod") },
+          upstreamHeader: { allOf: [schemaRef("UpstreamHeader")], nullable: true },
+          upstreamQueryParam: { allOf: [schemaRef("UpstreamQueryParam")], nullable: true },
+          openapiSpec: {
+            nullable: true,
+            oneOf: [{ type: "string" }, { type: "object", additionalProperties: true }],
+          },
+          timeoutMs: { type: "integer", minimum: 1000, nullable: true },
+          maxResponseBytes: { type: "integer", minimum: 1024, nullable: true },
+          webhook: { allOf: [schemaRef("Webhook")], nullable: true },
+          healthPath: { type: "string", maxLength: 512, nullable: true },
+          tags: { type: "array", maxItems: 10, items: { type: "string", maxLength: 32 } },
+          payerAllowlist: { type: "array", nullable: true, maxItems: 500, items: stellarAddress },
+          payerDenylist: { type: "array", maxItems: 500, items: stellarAddress },
+          listed: {
+            type: "boolean",
+            description: "List or unlist the API (listing needs verified ownership).",
+          },
+        },
+      },
+      ArchivedApi: {
+        type: "object",
+        required: ["id", "archived", "archivedAt"],
+        properties: {
+          id: { type: "string" },
+          archived: { type: "boolean", enum: [true] },
+          archivedAt: { type: "string", format: "date-time" },
+        },
+      },
+      ApiCall: {
+        type: "object",
+        description: "One proxied call.",
+        properties: {
+          id: { type: "string" },
+          apiId: { type: "string" },
+          payerAddress: { type: "string" },
+          amount: usdcAmount,
+          charged: { type: "boolean" },
+          method: schemaRef("HttpMethod"),
+          path: { type: "string" },
+          responseStatus: { type: "integer" },
+          durationMs: { type: "integer" },
+          txHash: { type: "string", nullable: true, description: "Settlement transaction." },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      ApiStats: {
+        type: "object",
+        required: ["apiId", "calls", "chargedCalls", "revenue", "currency", "recentCalls"],
+        properties: {
+          apiId: { type: "string" },
+          archivedAt: { type: "string", format: "date-time", nullable: true },
+          calls: { type: "integer", description: "All recorded calls." },
+          chargedCalls: { type: "integer" },
+          revenue: { ...usdcAmount, description: "Gross revenue from charged calls." },
+          uniquePayers: { type: "integer" },
+          avgDurationMs: { type: "integer" },
+          refundedCalls: { type: "integer" },
+          refunded: usdcAmount,
+          netRevenue: { ...usdcAmount, description: "Revenue minus refunds." },
+          currency: { type: "string", enum: ["USDC"] },
+          recentCalls: {
+            type: "array",
+            maxItems: 50,
+            description: "The 50 most recent calls, newest first.",
+            items: schemaRef("ApiCall"),
+          },
+        },
+      },
+      ApiTimeSeries: {
+        type: "object",
+        required: ["apiId", "days", "series"],
+        properties: {
+          apiId: { type: "string" },
+          days: { type: "integer", enum: [7, 30, 90] },
+          series: {
+            type: "array",
+            description: "One point per UTC day, oldest first; days without calls are zero.",
+            items: {
+              type: "object",
+              required: ["date", "calls", "revenue"],
+              properties: {
+                date: { type: "string", format: "date" },
+                calls: { type: "integer" },
+                revenue: usdcAmount,
+              },
+            },
+          },
+        },
+      },
+      PayerCalls: {
+        type: "object",
+        required: ["payer", "calls", "limit", "offset", "nextOffset"],
+        properties: {
+          payer: stellarAddress,
+          calls: { type: "array", items: schemaRef("ApiCall") },
+          limit: { type: "integer" },
+          offset: { type: "integer" },
+          nextOffset: {
+            type: "integer",
+            nullable: true,
+            description: "Offset of the next page, or null on the last page.",
+          },
+        },
+      },
+      AccessPass: {
+        type: "object",
+        required: ["passId", "expiresAt", "message"],
+        properties: {
+          passId: { type: "string" },
+          expiresAt: { type: "string", format: "date-time" },
+          message: { type: "string", enum: ["Pass activated", "Pass already active"] },
+        },
+      },
+      CreatePublisherRequest: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "email", "walletAddress"],
+        properties: {
+          name: { type: "string" },
+          email: { type: "string", format: "email" },
+          walletAddress: { ...stellarAddress, description: "Default payout wallet." },
+        },
+      },
+      RegisteredPublisher: {
+        type: "object",
+        required: ["id", "name", "email", "walletAddress", "apiKey", "createdAt"],
         properties: {
           id: { type: "string" },
           name: { type: "string" },
           email: { type: "string", format: "email" },
-          walletAddress: { type: "string" },
+          walletAddress: stellarAddress,
+          apiKey: {
+            type: "string",
+            description: "Publisher API key. Shown only once — store it securely.",
+          },
           createdAt: { type: "string", format: "date-time" },
         },
       },
-      PublisherRegisterRequest: {
-        type: "object",
-        required: ["name", "email", "walletAddress"],
-        properties: {
-          name: { type: "string", example: "Alice" },
-          email: { type: "string", format: "email", example: "alice@example.com" },
-          walletAddress: {
-            type: "string",
-            example: "GABC...XYZ",
-            description: "Stellar wallet address",
-          },
-        },
+    },
+    responses: {
+      BadRequest: {
+        description: "The request failed validation.",
+        content: json(schemaRef("Error")),
       },
-      PublisherRegisterResponse: {
-        allOf: [
-          { $ref: "#/components/schemas/Publisher" },
-          {
-            type: "object",
-            properties: {
-              apiKey: {
-                type: "string",
-                description: "Shown once — store it securely",
-              },
-            },
-          },
-        ],
+      Unauthorized: {
+        description: "Missing or invalid x-api-key (or request signature).",
+        content: json(schemaRef("Error")),
       },
-      Resource: {
-        type: "object",
-        properties: {
-          id: { type: "string" },
-          title: { type: "string" },
-          description: { type: "string", nullable: true },
-          price: { type: "string", example: "0.50" },
-          walletAddress: { type: "string" },
-          resourceType: { type: "string", enum: ["file", "link"] },
-          verificationStatus: { type: "string", enum: ["pending", "verified", "rejected"] },
-          listed: { type: "boolean" },
-          onchainStatus: { type: "string", enum: ["none", "pending", "registered", "failed"] },
-          onchainTxHash: { type: "string", nullable: true },
-          tags: { type: "array", items: { type: "string" } },
-          contentHash: {
-            type: "string",
-            nullable: true,
-            description:
-              "SHA-256 content integrity anchor recorded in the on-chain registry metadata; null when no anchor is available.",
-          },
-          accessUrl: { type: "string", format: "uri" },
-          createdAt: { type: "string", format: "date-time" },
-        },
+      Forbidden: {
+        description: "Payee signature missing or invalid when changing walletAddress.",
+        content: json(schemaRef("Error")),
       },
-      VerificationResult: {
-        type: "object",
-        properties: {
-          isOriginal: { type: "boolean" },
-          confidence: { type: "number", format: "float", minimum: 0, maximum: 1 },
-          flags: {
-            type: "array",
-            items: { type: "string" },
-          },
-          usage: {
-            type: "object",
-            description: "Model token usage and estimated cost for this verification",
-            properties: {
-              promptTokens: { type: "integer" },
-              completionTokens: { type: "integer" },
-              totalTokens: { type: "integer" },
-              estimatedCostUsd: { type: "number", format: "float" },
-            },
-          },
-        },
+      NotFound: {
+        description: "Not found, not listed, or not owned by the caller.",
+        content: json(schemaRef("Error")),
       },
-      AgentStatusResponse: {
-        type: "object",
-        properties: {
-          agent: {
-            type: "object",
-            properties: {
-              name: { type: "string" },
-              walletAddress: { type: "string" },
-              network: { type: "string" },
-              endpoint: { type: "string", format: "uri" },
-              pricePerVerification: { type: "string" },
-              currency: { type: "string" },
-              status: { type: "string" },
-            },
-          },
-          stats: {
-            type: "object",
-            properties: {
-              totalVerifications: { type: "integer" },
-              verified: { type: "integer" },
-              rejected: { type: "integer" },
-              totalEarned: { type: "string" },
-              avgConfidence: { type: "string" },
-            },
-          },
-          usage: {
-            type: "object",
-            description: "Aggregate model token usage and estimated spend across all verifications",
-            properties: {
-              totalPromptTokens: { type: "integer" },
-              totalCompletionTokens: { type: "integer" },
-              totalTokens: { type: "integer" },
-              estimatedCostUsd: { type: "string" },
-              model: { type: "string" },
-            },
-          },
-          recentActivity: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                id: { type: "string" },
-                resourceTitle: { type: "string" },
-                isOriginal: { type: "boolean" },
-                confidence: { type: "number" },
-                flags: { type: "array", items: { type: "string" } },
-                checkedAt: { type: "string", format: "date-time" },
-              },
-            },
-          },
-        },
+      Conflict: { description: "Conflict.", content: json(schemaRef("Error")) },
+      TooManyRequests: {
+        description: "Rate limit exceeded for this client IP or wallet.",
+        headers: { "Retry-After": headerRef("RetryAfter"), ...rateLimitHeaders },
+        content: json(schemaRef("RateLimitError")),
       },
-      RegistryStatusResponse: {
-        type: "object",
-        properties: {
-          contractId: { type: "string" },
-          network: { type: "string", example: "testnet" },
-          resourceCount: { type: "integer" },
-        },
+      PaymentRequired: {
+        description:
+          "x402 challenge: no (valid) payment was attached. Pay the amount described in the " +
+          "PAYMENT-REQUIRED header and retry with PAYMENT-SIGNATURE.",
+        headers: { "PAYMENT-REQUIRED": headerRef("PaymentRequired") },
+        content: json({ type: "object", additionalProperties: true }),
       },
-      UnsignedTxResponse: {
-        type: "object",
-        properties: {
-          unsignedXdr: {
-            type: "string",
-            description: "Base64-encoded unsigned Stellar transaction",
-          },
-          networkPassphrase: { type: "string" },
+      MethodNotAllowed: {
+        description: "The HTTP method is not in the API's allowedMethods.",
+        headers: {
+          Allow: { description: "Allowed methods.", schema: { type: "string" } },
         },
+        content: json(schemaRef("Error")),
+      },
+      IdempotencyConflict: {
+        description:
+          "The Idempotency-Key is in use by a call in progress, or was used with a different " +
+          "payment.",
+        content: json(schemaRef("Error")),
+      },
+      IdempotencyMismatch: {
+        description: "The Idempotency-Key was already used for a different request.",
+        content: json(schemaRef("Error")),
+      },
+      UpstreamFailed: {
+        description:
+          "The upstream could not be reached, was blocked, or returned too large a body. Not " +
+          "charged.",
+        content: json(schemaRef("UpstreamError")),
+      },
+      UpstreamTimeout: {
+        description: "The upstream timed out. Not charged.",
+        content: json(schemaRef("UpstreamError")),
       },
     },
   },
   paths: {
-    // ── Health ──────────────────────────────────────────────────────────────
-    "/health": {
+    "/apis": {
       get: {
-        tags: ["Health"],
-        summary: "Liveness probe",
-        operationId: "getHealth",
-        responses: {
-          "200": {
-            description: "Service is alive",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/HealthResponse" } },
-            },
-          },
-        },
-      },
-    },
-    "/health/ready": {
-      get: {
-        tags: ["Health"],
-        summary: "Readiness probe",
-        operationId: "getHealthReady",
-        description: "Checks database and Soroban RPC connectivity.",
-        responses: {
-          "200": {
-            description: "All dependencies healthy",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/ReadinessResponse" } },
-            },
-          },
-          "503": {
-            description: "One or more dependencies unavailable",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/ReadinessResponse" } },
-            },
-          },
-        },
-      },
-    },
-
-    // ── Publishers ──────────────────────────────────────────────────────────
-    "/publishers": {
-      post: {
-        tags: ["Publishers"],
-        summary: "Register a new publisher",
-        operationId: "registerPublisher",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: { $ref: "#/components/schemas/PublisherRegisterRequest" },
-            },
-          },
-        },
-        responses: {
-          "201": {
-            description: "Publisher created — API key shown once",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/PublisherRegisterResponse" },
-              },
-            },
-          },
-          "409": {
-            description: "Email already registered",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/publishers/wallet/{address}": {
-      get: {
-        tags: ["Publishers"],
-        summary: "Look up publisher by wallet address",
-        operationId: "getPublisherByWallet",
+        tags: ["Catalog"],
+        summary: "List APIs in the catalog",
+        description:
+          "Listed, non-archived APIs. Paginate with limit/offset; ordering is stable within a " +
+          "sort.",
+        operationId: "listApis",
         parameters: [
           {
-            name: "address",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-            description: "Stellar wallet address",
-          },
-        ],
-        responses: {
-          "200": {
-            description: "Publisher found",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Publisher" } } },
-          },
-          "404": {
-            description: "Not found",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/publishers/me": {
-      get: {
-        tags: ["Publishers"],
-        summary: "Get own publisher profile",
-        operationId: "getMyProfile",
-        security: [{ ApiKeyAuth: [] }],
-        responses: {
-          "200": {
-            description: "Own profile",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Publisher" } } },
-          },
-          "401": {
-            description: "Missing or invalid API key",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/publishers/me/resources": {
-      get: {
-        tags: ["Publishers"],
-        summary: "List own resources",
-        operationId: "getMyResources",
-        security: [{ ApiKeyAuth: [] }],
-        responses: {
-          "200": {
-            description: "Array of resources",
-            content: {
-              "application/json": {
-                schema: { type: "array", items: { $ref: "#/components/schemas/Resource" } },
-              },
-            },
-          },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/publishers/me/analytics": {
-      get: {
-        tags: ["Publishers"],
-        summary: "Earnings and stats for own resources",
-        operationId: "getMyAnalytics",
-        security: [{ ApiKeyAuth: [] }],
-        responses: {
-          "200": {
-            description: "Analytics summary",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    summary: {
-                      type: "object",
-                      properties: {
-                        totalEarned: { type: "string" },
-                        currency: { type: "string" },
-                        totalSales: { type: "integer" },
-                        totalResources: { type: "integer" },
-                        listedResources: { type: "integer" },
-                        verification: {
-                          type: "object",
-                          properties: {
-                            verified: { type: "integer" },
-                            rejected: { type: "integer" },
-                            pending: { type: "integer" },
-                          },
-                        },
-                      },
-                    },
-                    resources: { type: "array", items: { $ref: "#/components/schemas/Resource" } },
-                  },
-                },
-              },
-            },
-          },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/publishers/leaderboard": {
-      get: {
-        tags: ["Publishers"],
-        summary: "Public creator leaderboard sorted by earnings",
-        operationId: "getLeaderboard",
-        responses: {
-          "200": {
-            description: "Leaderboard array",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      id: { type: "string" },
-                      name: { type: "string" },
-                      walletAddress: { type: "string" },
-                      joinedAt: { type: "string", format: "date-time" },
-                      totalResources: { type: "integer" },
-                      listedResources: { type: "integer" },
-                      verifiedResources: { type: "integer" },
-                      totalSales: { type: "integer" },
-                      totalEarned: { type: "string" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-
-    // ── Resources ───────────────────────────────────────────────────────────
-    "/resources": {
-      get: {
-        tags: ["Resources"],
-        summary: "Browse public resource catalog",
-        operationId: "listResources",
-        parameters: [
-          {
-            name: "search",
+            name: "q",
             in: "query",
-            required: false,
-            schema: { type: "string" },
-            description: "Filter resources by title or description (case-insensitive)",
+            description: "Case-insensitive search in name and description.",
+            schema: { type: "string", maxLength: 100 },
+          },
+          {
+            name: "tag",
+            in: "query",
+            description: "Repeatable. An API must carry every requested tag.",
+            style: "form",
+            explode: true,
+            schema: { type: "array", maxItems: 10, items: { type: "string", maxLength: 32 } },
           },
           {
             name: "sort",
             in: "query",
-            required: false,
+            description: "`popular` ranks by charged calls in the last 7 days.",
             schema: {
               type: "string",
-              enum: ["newest", "price_asc", "price_desc", "title"],
+              enum: ["newest", "price_asc", "price_desc", "popular"],
+              default: "newest",
             },
-            description: "Sort order. Defaults to newest first.",
+          },
+          paramRef("Limit"),
+          paramRef("Offset"),
+        ],
+        responses: {
+          "200": {
+            description: "One page of APIs.",
+            content: json({ type: "array", items: schemaRef("PublicApi") }),
+          },
+          "400": responseRef("BadRequest"),
+        },
+      },
+      post: {
+        tags: ["API management"],
+        summary: "Register an API",
+        description:
+          "Creates an unlisted API owned by the caller. Verify ownership, then list it. " +
+          "Rate-limited per IP and per publisher wallet.",
+        operationId: "createApi",
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [paramRef("RequestTimestamp"), paramRef("RequestSignature")],
+        requestBody: { required: true, content: json(schemaRef("CreateApiRequest")) },
+        responses: {
+          "201": {
+            description: "The API was created.",
+            headers: rateLimitHeaders,
+            content: json(schemaRef("CreatedApi")),
+          },
+          "400": responseRef("BadRequest"),
+          "401": responseRef("Unauthorized"),
+          "429": responseRef("TooManyRequests"),
+        },
+      },
+    },
+    "/apis/{id}": {
+      parameters: [paramRef("ApiId")],
+      get: {
+        tags: ["Catalog"],
+        summary: "Get a listed API",
+        operationId: "getApi",
+        responses: {
+          "200": { description: "The API.", content: json(schemaRef("PublicApi")) },
+          "404": responseRef("NotFound"),
+        },
+      },
+      patch: {
+        tags: ["API management"],
+        summary: "Update an API",
+        operationId: "updateApi",
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          paramRef("RequestTimestamp"),
+          paramRef("RequestSignature"),
+          {
+            name: "X-Payee-Timestamp",
+            in: "header",
+            description: "Required when changing walletAddress.",
+            schema: { type: "string" },
+          },
+          {
+            name: "X-Payee-Signature",
+            in: "header",
+            description:
+              "Signature by the current payee wallet. Required when changing walletAddress.",
+            schema: { type: "string" },
+          },
+        ],
+        requestBody: { required: true, content: json(schemaRef("UpdateApiRequest")) },
+        responses: {
+          "200": { description: "The updated API.", content: json(schemaRef("OwnerApi")) },
+          "400": responseRef("BadRequest"),
+          "401": responseRef("Unauthorized"),
+          "403": responseRef("Forbidden"),
+          "404": responseRef("NotFound"),
+        },
+      },
+      delete: {
+        tags: ["API management"],
+        summary: "Archive an API",
+        description: "Unlists and hides the API. Its call history is kept for statistics.",
+        operationId: "archiveApi",
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [paramRef("RequestTimestamp"), paramRef("RequestSignature")],
+        responses: {
+          "200": { description: "The API was archived.", content: json(schemaRef("ArchivedApi")) },
+          "401": responseRef("Unauthorized"),
+          "404": responseRef("NotFound"),
+        },
+      },
+    },
+    "/apis/{id}/openapi.json": {
+      parameters: [paramRef("ApiId")],
+      get: {
+        tags: ["Catalog"],
+        summary: "Get an API's own OpenAPI document",
+        description: "The provider's document, rewritten to point at the paid proxy URL.",
+        operationId: "getApiOpenApi",
+        responses: {
+          "200": {
+            description: "OpenAPI document.",
+            content: json({ type: "object", additionalProperties: true }),
+          },
+          "404": responseRef("NotFound"),
+        },
+      },
+    },
+    "/apis/{id}/verify-ownership": {
+      parameters: [paramRef("ApiId")],
+      post: {
+        tags: ["API management"],
+        summary: "Verify upstream ownership",
+        description:
+          "Fetches ownershipVerification.url on the upstream origin and checks it serves " +
+          "ownershipVerification.expectedContent.",
+        operationId: "verifyApiOwnership",
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [paramRef("RequestTimestamp"), paramRef("RequestSignature")],
+        responses: {
+          "200": {
+            description: "The API with its updated ownership status.",
+            content: json(schemaRef("OwnerApi")),
+          },
+          "400": responseRef("BadRequest"),
+          "401": responseRef("Unauthorized"),
+          "404": responseRef("NotFound"),
+        },
+      },
+    },
+    "/apis/{id}/test-upstream": {
+      parameters: [paramRef("ApiId")],
+      post: {
+        tags: ["API management"],
+        summary: "Test the saved upstream configuration",
+        description:
+          "Sends one GET to the upstream (healthPath when set, otherwise upstreamUrl) with the " +
+          "saved secret header and query parameter. No payment is requested or settled. The " +
+          "wait is capped at 10 seconds and the response body is never read. Returns status, " +
+          "latency and content type only. Limited to 10 tests per minute per publisher.",
+        operationId: "testApiUpstream",
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [paramRef("RequestTimestamp"), paramRef("RequestSignature")],
+        responses: {
+          "200": {
+            description: "Diagnostics for the test request.",
+            content: json({
+              type: "object",
+              required: ["apiId", "ok", "status", "latencyMs", "error", "charged", "testedAt"],
+              properties: {
+                apiId: { type: "integer" },
+                ok: { type: "boolean" },
+                status: { type: "integer", nullable: true },
+                latencyMs: { type: "integer" },
+                contentType: { type: "string", nullable: true },
+                request: {
+                  type: "object",
+                  properties: {
+                    method: { type: "string", enum: ["GET"] },
+                    path: { type: "string" },
+                    usedHeaderSecret: { type: "boolean" },
+                    usedQuerySecret: { type: "boolean" },
+                  },
+                },
+                error: {
+                  type: "object",
+                  nullable: true,
+                  properties: {
+                    kind: {
+                      type: "string",
+                      enum: ["blocked", "timeout", "too_large", "network", "config"],
+                    },
+                    message: { type: "string" },
+                  },
+                },
+                diagnosis: { type: "string" },
+                charged: { type: "boolean", enum: [false] },
+                testedAt: { type: "string", format: "date-time" },
+              },
+            }),
+          },
+          "401": responseRef("Unauthorized"),
+          "404": responseRef("NotFound"),
+          "429": responseRef("TooManyRequests"),
+        },
+      },
+    },
+    "/apis/{id}/stats": {
+      parameters: [paramRef("ApiId")],
+      get: {
+        tags: ["Statistics"],
+        summary: "Usage and revenue for one of your APIs",
+        description:
+          "Totals plus a page of recent calls, newest first. `from`/`to` restrict both the totals and the call history to the same window (from inclusive, to exclusive, at most 366 days). Archived APIs are included.",
+        operationId: "getApiStats",
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          {
+            name: "from",
+            in: "query",
+            description: "Start of the window, inclusive. ISO-8601 date or date-time.",
+            schema: { type: "string", format: "date-time" },
+          },
+          {
+            name: "to",
+            in: "query",
+            description: "End of the window, exclusive. ISO-8601 date or date-time.",
+            schema: { type: "string", format: "date-time" },
           },
           {
             name: "limit",
             in: "query",
-            required: false,
-            schema: { type: "integer", minimum: 1, maximum: 100, default: 20 },
-            description: "Max number of resources to return (1-100, default 20).",
+            description: "Calls per page.",
+            schema: { type: "integer", minimum: 1, maximum: 100, default: 50 },
           },
           {
             name: "offset",
             in: "query",
-            required: false,
+            description: "Calls to skip.",
             schema: { type: "integer", minimum: 0, default: 0 },
-            description: "Number of resources to skip for pagination.",
           },
         ],
         responses: {
-          "200": {
-            description:
-              "Array of listed resources. Pagination metadata is returned via the " +
-              "X-Total-Count, X-Limit, X-Offset, and X-Next-Offset response headers " +
-              "(X-Next-Offset is omitted on the last page).",
-            content: {
-              "application/json": {
-                schema: { type: "array", items: { $ref: "#/components/schemas/Resource" } },
-              },
-            },
-            headers: {
-              "X-Total-Count": {
-                schema: { type: "integer" },
-                description: "Total number of matching resources across all pages.",
-              },
-              "X-Limit": {
-                schema: { type: "integer" },
-                description: "The page size used for this response.",
-              },
-              "X-Offset": {
-                schema: { type: "integer" },
-                description: "The offset used for this response.",
-              },
-              "X-Next-Offset": {
-                schema: { type: "integer" },
-                description: "Offset to use for the next page. Omitted on the last page.",
-              },
-            },
-          },
+          "200": { description: "Statistics.", content: json(schemaRef("ApiStats")) },
+          "400": responseRef("BadRequest"),
+          "401": responseRef("Unauthorized"),
+          "404": responseRef("NotFound"),
         },
       },
-      post: {
-        tags: ["Resources"],
-        summary: "Publish a new resource (file or link)",
-        operationId: "publishResource",
-        security: [{ ApiKeyAuth: [], RequestSignature: [] }],
-        requestBody: {
-          required: true,
-          content: {
-            "multipart/form-data": {
-              schema: {
-                type: "object",
-                required: ["title", "price"],
-                properties: {
-                  title: { type: "string" },
-                  description: { type: "string" },
-                  price: { type: "string", example: "0.50", description: "USDC price" },
-                  walletAddress: { type: "string", description: "Override publisher wallet" },
-                  file: {
-                    type: "string",
-                    format: "binary",
-                    description: "File upload (omit for link resource)",
-                  },
-                  externalUrl: {
-                    type: "string",
-                    format: "uri",
-                    description: "Required when not uploading a file",
-                  },
-                },
-              },
-            },
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["title", "price", "externalUrl"],
-                properties: {
-                  title: { type: "string" },
-                  description: { type: "string" },
-                  price: { type: "string", example: "0.50" },
-                  walletAddress: { type: "string" },
-                  externalUrl: { type: "string", format: "uri" },
-                },
-              },
-            },
+    },
+    "/apis/{id}/stats/time-series": {
+      parameters: [paramRef("ApiId")],
+      get: {
+        tags: ["Statistics"],
+        summary: "Daily calls and revenue for one of your APIs",
+        operationId: "getApiTimeSeries",
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          {
+            name: "days",
+            in: "query",
+            description: "Window size. Other values fall back to 30.",
+            schema: { type: "integer", enum: [7, 30, 90], default: 30 },
           },
+        ],
+        responses: {
+          "200": { description: "Daily series.", content: json(schemaRef("ApiTimeSeries")) },
+          "401": responseRef("Unauthorized"),
+          "404": responseRef("NotFound"),
         },
+      },
+    },
+    "/payers/{address}/calls": {
+      parameters: [
+        {
+          name: "address",
+          in: "path",
+          required: true,
+          description: "Payer wallet.",
+          schema: stellarAddress,
+        },
+      ],
+      get: {
+        tags: ["Statistics"],
+        summary: "Receipts for calls a wallet paid for",
+        operationId: "listPayerCalls",
+        parameters: [paramRef("Limit"), paramRef("Offset")],
+        responses: {
+          "200": { description: "One page of calls.", content: json(schemaRef("PayerCalls")) },
+          "400": responseRef("BadRequest"),
+        },
+      },
+    },
+    "/publishers": {
+      post: {
+        tags: ["Publishers"],
+        summary: "Register as a publisher",
+        description:
+          "Creates a publisher and returns its API key (shown once). Public and rate-limited " +
+          "per client IP (RATE_LIMIT_REGISTER_IP_MAX per RATE_LIMIT_REGISTER_IP_WINDOW_MS).",
+        operationId: "registerPublisher",
+        requestBody: { required: true, content: json(schemaRef("CreatePublisherRequest")) },
         responses: {
           "201": {
-            description: "Resource created",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Resource" } } },
+            description: "The publisher was created.",
+            headers: rateLimitHeaders,
+            content: json(schemaRef("RegisteredPublisher")),
           },
-          "400": {
-            description: "Validation error",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "429": {
-            description: "Rate limit exceeded",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/RateLimitError" } },
-            },
-          },
-        },
-      },
-    },
-    "/resources/{id}/meta": {
-      get: {
-        tags: ["Resources"],
-        summary: "Get resource preview metadata (no payment required)",
-        operationId: "getResourceMeta",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        responses: {
-          "200": {
-            description: "Resource metadata",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Resource" } } },
-          },
-          "404": {
-            description: "Not found",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/resources/{id}/verification": {
-      get: {
-        tags: ["Resources"],
-        summary: "Get verification status and details",
-        operationId: "getResourceVerification",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        responses: {
-          "200": {
-            description: "Verification details",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/VerificationResult" } },
-            },
-          },
-          "404": {
-            description: "Not found",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/resources/{id}": {
-      get: {
-        tags: ["Resources"],
-        summary: "Access a resource (x402 paywalled)",
-        operationId: "accessResource",
-        description:
-          "Returns the resource content or a redirect URL after x402 payment. Responds with HTTP 402 if payment is missing.",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        security: [{ X402Payment: [] }],
-        responses: {
-          "200": { description: "Resource content or link URL delivered" },
-          "402": { description: "Payment required (x402)" },
-          "404": {
-            description: "Not found or not listed",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
+          "400": responseRef("BadRequest"),
           "409": {
-            description: "Price mismatch between DB and on-chain registry",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+            description: "Email already registered.",
+            content: json(schemaRef("Error")),
           },
-          "503": {
-            description: "On-chain price lookup failed",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-      delete: {
-        tags: ["Resources"],
-        summary: "Delist a resource (owner only)",
-        operationId: "delistResource",
-        security: [{ ApiKeyAuth: [], RequestSignature: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        responses: {
-          "200": { description: "Resource delisted" },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "404": {
-            description: "Not found or not owned",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
+          "429": responseRef("TooManyRequests"),
         },
       },
     },
-    "/resources/{id}/register/prepare": {
+    "/publishers/me/apis": {
       get: {
-        tags: ["Resources"],
-        summary: "Build unsigned on-chain register transaction",
-        operationId: "prepareRegister",
+        tags: ["API management"],
+        summary: "List your APIs",
+        description: "All non-archived APIs owned by the caller, listed or not, newest first.",
+        operationId: "listMyApis",
         security: [{ ApiKeyAuth: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         responses: {
           "200": {
-            description: "Unsigned XDR + metadata",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/UnsignedTxResponse" } },
-            },
+            description: "Your APIs.",
+            content: json({ type: "array", items: schemaRef("OwnerApi") }),
           },
-          "400": {
-            description: "Resource not verified",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "403": {
-            description: "Forbidden",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "404": {
-            description: "Not found",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "409": {
-            description: "Already registered",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
+          "401": responseRef("Unauthorized"),
         },
       },
     },
-    "/resources/{id}/register": {
+    "/api/{id}/pass": {
+      parameters: [paramRef("ApiId")],
       post: {
-        tags: ["Resources"],
-        summary: "Submit signed register transaction to Soroban",
-        operationId: "registerResource",
-        security: [{ ApiKeyAuth: [], RequestSignature: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        requestBody: {
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  signedXdr: {
-                    type: "string",
-                    description:
-                      "Signed Stellar transaction XDR (omit to use legacy server-signed flow)",
-                  },
-                },
-              },
-            },
-          },
-        },
+        tags: ["Proxy"],
+        summary: "Buy a 1-hour access pass",
+        description:
+          "Pays passPrice once via x402; calls from the same wallet are then free until the " +
+          "pass expires. Without a payment the gateway answers with the 402 challenge.",
+        operationId: "buyAccessPass",
+        security: [{}, { X402Payment: [] }],
         responses: {
           "200": {
-            description: "Registration result",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    id: { type: "string" },
-                    onchainStatus: { type: "string" },
-                    txHash: { type: "string" },
-                  },
-                },
-              },
-            },
+            description: "A pass is already active.",
+            content: json(schemaRef("AccessPass")),
           },
-          "400": {
-            description: "Not verified",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "409": {
-            description: "Already registered or pending",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "502": {
-            description: "On-chain submission failed",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
+          "201": { description: "Pass activated.", content: json(schemaRef("AccessPass")) },
+          "402": responseRef("PaymentRequired"),
+          "404": responseRef("NotFound"),
         },
       },
     },
-    "/resources/{id}/price/prepare": {
-      post: {
-        tags: ["Resources"],
-        summary: "Build unsigned set_price transaction",
-        operationId: "preparePriceUpdate",
-        security: [{ ApiKeyAuth: [], RequestSignature: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["price"],
-                properties: { price: { type: "string", example: "1.00" } },
-              },
-            },
-          },
-        },
-        responses: {
-          "200": {
-            description: "Unsigned XDR",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/UnsignedTxResponse" } },
-            },
-          },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "403": {
-            description: "Forbidden",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "404": {
-            description: "Not found",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/resources/{id}/price": {
-      post: {
-        tags: ["Resources"],
-        summary: "Submit signed set_price transaction and sync DB",
-        operationId: "updatePrice",
-        security: [{ ApiKeyAuth: [], RequestSignature: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["signedXdr", "price"],
-                properties: {
-                  signedXdr: { type: "string" },
-                  price: { type: "string", example: "1.00" },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          "200": {
-            description: "Price updated",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    id: { type: "string" },
-                    price: { type: "string" },
-                    status: { type: "string" },
-                  },
-                },
-              },
-            },
-          },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "502": {
-            description: "Transaction failed",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "504": {
-            description: "Confirmation timeout",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/resources/{id}/ownership/prepare": {
-      post: {
-        tags: ["Resources"],
-        summary: "Build unsigned transfer_ownership transaction",
-        operationId: "prepareOwnershipTransfer",
-        security: [{ ApiKeyAuth: [], RequestSignature: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["newCreator"],
-                properties: {
-                  newCreator: { type: "string", description: "New owner Stellar address" },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          "200": {
-            description: "Unsigned XDR",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/UnsignedTxResponse" } },
-            },
-          },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "403": {
-            description: "Forbidden",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "404": {
-            description: "Not found",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-    "/resources/{id}/ownership": {
-      post: {
-        tags: ["Resources"],
-        summary: "Submit signed transfer_ownership transaction and sync DB",
-        operationId: "transferOwnership",
-        security: [{ ApiKeyAuth: [], RequestSignature: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["signedXdr", "newCreator"],
-                properties: {
-                  signedXdr: { type: "string" },
-                  newCreator: { type: "string" },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          "200": {
-            description: "Ownership transferred",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    id: { type: "string" },
-                    newCreator: { type: "string" },
-                    status: { type: "string" },
-                  },
-                },
-              },
-            },
-          },
-          "401": {
-            description: "Unauthorized",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "502": {
-            description: "Transaction failed",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-          "504": {
-            description: "Confirmation timeout",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-
-    // ── Registry ────────────────────────────────────────────────────────────
-    "/registry/status": {
-      get: {
-        tags: ["Registry"],
-        summary: "On-chain registry metadata and resource count",
-        operationId: "getRegistryStatus",
-        responses: {
-          "200": {
-            description: "Registry status",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/RegistryStatusResponse" },
-              },
-            },
-          },
-          "503": {
-            description: "Registry unavailable",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
-          },
-        },
-      },
-    },
-
-    // ── Verify ──────────────────────────────────────────────────────────────
-    "/verify-content": {
-      post: {
-        tags: ["Verify"],
-        summary: "AI originality check (x402 paywalled)",
-        operationId: "verifyContent",
-        description: `Requires an x402 payment of $${0.1} USDC. Returns originality analysis.`,
-        security: [{ X402Payment: [] }],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["content"],
-                properties: {
-                  content: { type: "string", description: "Text content to verify" },
-                  resourceId: {
-                    type: "string",
-                    description: "Optional — saves result to this resource",
-                  },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          "200": {
-            description: "Verification result",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/VerificationResult" } },
-            },
-          },
-          "402": { description: "Payment required (x402)" },
-          "429": {
-            description: "Rate limit exceeded",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/RateLimitError" } },
-            },
-          },
-        },
-      },
-    },
-    "/agent/status": {
-      get: {
-        tags: ["Verify"],
-        summary: "Public agent stats and recent verification activity",
-        operationId: "getAgentStatus",
-        responses: {
-          "200": {
-            description: "Agent status",
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/AgentStatusResponse" } },
-            },
-          },
-        },
-      },
-    },
+    "/api/{id}": proxyPathItem(false),
+    "/api/{id}/{path}": proxyPathItem(true),
   },
-} as const;
+};
+
+export default openApiSpec;
