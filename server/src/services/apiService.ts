@@ -1,13 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, gt, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNotNull, lt, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { apiCalls, apis } from "../db/schema.js";
+import { apiCalls, apis, apiDailyRollups, apiCallFinancialRecords } from "../db/schema.js";
 import { config, upstreamKeyRing } from "../config.js";
 import { encryptSecret } from "../utils/secretBox.js";
-import { validateUpstreamUrl } from "../lib/upstreamGuard.js";
-import { sendUpstream } from "../lib/upstreamClient.js";
 import { createTtlCache } from "../lib/ttlCache.js";
-import type { apiCatalogSortValues } from "../schemas/requests.js";
 import { statsWhere, type RecentCallsOptions, type StatsRange } from "./apiStatsQuery.js";
 import {
   FileApiCallRecordOutbox,
@@ -72,8 +69,6 @@ export function toPublicApi(api: ApiRow) {
     },
     createdAt: api.createdAt,
   };
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface CreateApiInput {
@@ -124,22 +119,19 @@ export function toOwnerApi(api: ApiRow) {
 
 // Fields that are audited when changed. Secrets are masked in the audit log.
 const AUDITED_FIELDS: Array<keyof UpdateApiInput> = [
-  'name',
-  'description',
-  'upstreamUrl',
-  'upstreamMethod',
-  'upstreamHeaderValueEnc',
-  'upstreamQueryValueEnc',
-  'price',
-  'walletAddress',
+  "name",
+  "description",
+  "upstreamUrl",
+  "upstreamMethod",
+  "upstreamHeaderValueEnc",
+  "upstreamQueryValueEnc",
+  "price",
+  "walletAddress",
 ];
 
-const SECRET_FIELDS = new Set<string>([
-  'upstreamHeaderValueEnc',
-  'upstreamQueryValueEnc',
-]);
+const SECRET_FIELDS = new Set<string>(["upstreamHeaderValueEnc", "upstreamQueryValueEnc"]);
 
-const MASKED_VALUE = '***';
+const MASKED_VALUE = "***";
 
 // Injectable DNS resolver so tests can mock DNS lookups.
 export type TxtResolver = (host: string) => Promise<string[][]>;
@@ -204,22 +196,19 @@ async function checkDnsTxt(upstreamUrl: string, token: string): Promise<boolean>
     const records = await txtResolver(host);
     const expectedRecord = `${DNS_TXT_PREFIX}${token}`;
     for (const chunks of records) {
-      const joined = chunks.join('');
+      const joined = chunks.join("");
       if (joined.trim() === expectedRecord) {
         return true;
       }
     }
     return false;
   } catch (err) {
-    logger.warn({ err, upstreamUrl }, 'Failed to check DNS TXT ownership record');
+    logger.warn({ err, upstreamUrl }, "Failed to check DNS TXT ownership record");
     return false;
   }
 }
 
-async function verifyOwnership(
-  upstreamUrl: string,
-  token: string,
-): Promise<boolean> {
+async function verifyOwnership(upstreamUrl: string, token: string): Promise<boolean> {
   const [fileOk, dnsOk] = await Promise.all([
     checkWellKnownFile(upstreamUrl, token),
     checkDnsTxt(upstreamUrl, token),
@@ -233,7 +222,7 @@ function toOwnerApi(api: ApiRecord): OwnerApi {
   try {
     wellKnownUrl = new URL(WELL_KNOWN_PATH, api.upstreamUrl).toString();
   } catch {
-    wellKnownUrl = `${api.upstreamUrl.replace(/\/+$/, '')}${WELL_KNOWN_PATH}`;
+    wellKnownUrl = `${api.upstreamUrl.replace(/\/+$/, "")}${WELL_KNOWN_PATH}`;
   }
   return {
     id: api.id,
@@ -247,7 +236,7 @@ function toOwnerApi(api: ApiRecord): OwnerApi {
     ownershipVerified: api.ownershipVerified,
     ownershipVerification: {
       token: api.ownershipToken,
-      methods: ['well-known-file', 'dns-txt'],
+      methods: ["well-known-file", "dns-txt"],
       wellKnownFile: {
         url: wellKnownUrl,
         expectedLine: `${DNS_TXT_PREFIX}${api.ownershipToken}`,
@@ -265,14 +254,14 @@ function toOwnerApi(api: ApiRecord): OwnerApi {
 export async function createApi(input: CreateApiInput): Promise<OwnerApi> {
   const now = new Date().toISOString();
   const id = randomUUID();
-  const ownershipToken = randomUUID().replace(/-/g, '');
+  const ownershipToken = randomUUID().replace(/-/g, "");
   const record: ApiRecord = {
     id,
     publisherId: input.publisherId,
     name: input.name,
     description: input.description ?? null,
     upstreamUrl: input.upstreamUrl,
-    upstreamMethod: input.upstreamMethod ?? 'GET',
+    upstreamMethod: input.upstreamMethod ?? "GET",
     upstreamHeaderValueEnc: input.upstreamHeaderValueEnc ?? null,
     upstreamQueryValueEnc: input.upstreamQueryValueEnc ?? null,
     price: input.price,
@@ -284,83 +273,76 @@ export async function createApi(input: CreateApiInput): Promise<OwnerApi> {
     updatedAt: now,
   };
 
-export interface CreateApiInput {
-  publisherId: string;
-  name: string;
-  description?: string;
-  upstreamUrl: string;
-  price: string;
-  priceRules?: ApiPriceRule[];
-  walletAddress: string;
-  allowedMethods: string[];
-  upstreamHeader?: { name: string; value: string };
-  upstreamQueryParam?: { name: string; value: string };
-  openapiSpec?: string | Record<string, unknown>;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-  webhook?: { url: string; secret: string };
-  healthPath?: string;
-  tags: string[];
-  payerAllowlist?: string[];
-  payerDenylist?: string[];
-  /** Issue #30: price of a time-limited access pass (undefined = passes not offered). */
-  passPrice?: string;
-  /** Issue #32: free calls per wallet per day before the paywall applies (0 = disabled). */
-  freeCallsPerDay?: number;
-}
+  export interface CreateApiInput {
+    publisherId: string;
+    name: string;
+    description?: string;
+    upstreamUrl: string;
+    price: string;
+    priceRules?: ApiPriceRule[];
+    walletAddress: string;
+    allowedMethods: string[];
+    upstreamHeader?: { name: string; value: string };
+    upstreamQueryParam?: { name: string; value: string };
+    openapiSpec?: string | Record<string, unknown>;
+    timeoutMs?: number;
+    maxResponseBytes?: number;
+    webhook?: { url: string; secret: string };
+    healthPath?: string;
+    tags: string[];
+    payerAllowlist?: string[];
+    payerDenylist?: string[];
+    /** Issue #30: price of a time-limited access pass (undefined = passes not offered). */
+    passPrice?: string;
+    /** Issue #32: free calls per wallet per day before the paywall applies (0 = disabled). */
+    freeCallsPerDay?: number;
+  }
 
-export async function createApi(input: CreateApiInput): Promise<ApiRow> {
-  const [row] = await db
-    .insert(apis)
-    .values({
-      publisherId: input.publisherId,
-      name: input.name,
-      description: input.description,
-      upstreamUrl: checkedUpstreamUrl(input.upstreamUrl),
-      price: input.price,
-      priceRules: input.priceRules ?? [],
-      walletAddress: input.walletAddress,
-      allowedMethods: input.allowedMethods,
-      timeoutMs: clampTimeout(input.timeoutMs),
-      maxResponseBytes: checkedMaxResponseBytes(input.maxResponseBytes),
-      healthPath: input.healthPath,
-      tags: input.tags,
-      payerAllowlist: input.payerAllowlist ?? null,
-      payerDenylist: input.payerDenylist ?? [],
-      passPrice: input.passPrice ?? null,
-      freeCallsPerDay: input.freeCallsPerDay ?? 0,
-      ownershipToken: randomBytes(16).toString("hex"),
-      openapiSpec: checkedOpenApiSpec(input.openapiSpec),
-      streamingEnabled: input.streamingEnabled ?? false,
-      ...encryptedHeader(input.upstreamHeader),
-      ...encryptedQueryParam(input.upstreamQueryParam),
-    })
-    .returning();
-  return row;
-}
+  export async function createApi(input: CreateApiInput): Promise<ApiRow> {
+    const [row] = await db
+      .insert(apis)
+      .values({
+        publisherId: input.publisherId,
+        name: input.name,
+        description: input.description,
+        upstreamUrl: checkedUpstreamUrl(input.upstreamUrl),
+        price: input.price,
+        priceRules: input.priceRules ?? [],
+        walletAddress: input.walletAddress,
+        allowedMethods: input.allowedMethods,
+        timeoutMs: clampTimeout(input.timeoutMs),
+        maxResponseBytes: checkedMaxResponseBytes(input.maxResponseBytes),
+        healthPath: input.healthPath,
+        tags: input.tags,
+        payerAllowlist: input.payerAllowlist ?? null,
+        payerDenylist: input.payerDenylist ?? [],
+        passPrice: input.passPrice ?? null,
+        freeCallsPerDay: input.freeCallsPerDay ?? 0,
+        ownershipToken: randomBytes(16).toString("hex"),
+        openapiSpec: checkedOpenApiSpec(input.openapiSpec),
+        streamingEnabled: input.streamingEnabled ?? false,
+        ...encryptedHeader(input.upstreamHeader),
+        ...encryptedQueryParam(input.upstreamQueryParam),
+      })
+      .returning();
+    return row;
+  }
 
   return toOwnerApi(record);
 }
 
 export async function getApiById(id: string): Promise<ApiRecord | null> {
-  const row = await db<ApiRecord>('apis').where({ id }).first();
+  const row = await db<ApiRecord>("apis").where({ id }).first();
   return row ?? null;
 }
 
-export async function getOwnerApi(
-  id: string,
-  publisherId: string,
-): Promise<OwnerApi | null> {
-  const row = await db<ApiRecord>('apis')
-    .where({ id, publisherId })
-    .first();
+export async function getOwnerApi(id: string, publisherId: string): Promise<OwnerApi | null> {
+  const row = await db<ApiRecord>("apis").where({ id, publisherId }).first();
   return row ? toOwnerApi(row) : null;
 }
 
 export async function listOwnerApis(publisherId: string): Promise<OwnerApi[]> {
-  const rows = await db<ApiRecord>('apis')
-    .where({ publisherId })
-    .orderBy('createdAt', 'desc');
+  const rows = await db<ApiRecord>("apis").where({ publisherId }).orderBy("createdAt", "desc");
   return rows.map(toOwnerApi);
 }
 
@@ -440,8 +422,7 @@ export async function updateApi(api: ApiRow, input: UpdateApiInput): Promise<Api
   }
 
   const updates: Partial<ApiRecord> = {};
-  const changes: Array<{ field: string; oldValue: unknown; newValue: unknown }> =
-    [];
+  const changes: Array<{ field: string; oldValue: unknown; newValue: unknown }> = [];
 
   for (const field of AUDITED_FIELDS) {
     if (!(field in input)) {
@@ -463,7 +444,7 @@ export async function updateApi(api: ApiRow, input: UpdateApiInput): Promise<Api
   updates.updatedAt = now;
 
   // If the upstream URL changed, ownership must be re-verified.
-  const upstreamChanged = changes.some((c) => c.field === 'upstreamUrl');
+  const upstreamChanged = changes.some((c) => c.field === "upstreamUrl");
   if (upstreamChanged) {
     const verified = await verifyOwnership(
       (updates.upstreamUrl as string) ?? existing.upstreamUrl,
@@ -473,28 +454,20 @@ export async function updateApi(api: ApiRow, input: UpdateApiInput): Promise<Api
     updates.listed = verified;
   }
 
-  await db('apis').where({ id }).update(updates);
+  await db("apis").where({ id }).update(updates);
 
   for (const change of changes) {
-    await recordChange(
-      id,
-      change.field,
-      change.oldValue,
-      change.newValue,
-      publisherId,
-    );
+    await recordChange(id, change.field, change.oldValue, change.newValue, publisherId);
   }
 
-  const updated = await db<ApiRecord>('apis').where({ id }).first();
+  const updated = await db<ApiRecord>("apis").where({ id }).first();
   return updated ? toOwnerApi(updated) : null;
 }
 
-export async function listApiChanges(
-  apiId: string,
-): Promise<ApiChangeRecord[]> {
-  const rows = await db<ApiChangeRecord>('api_changes')
+export async function listApiChanges(apiId: string): Promise<ApiChangeRecord[]> {
+  const rows = await db<ApiChangeRecord>("api_changes")
     .where({ apiId })
-    .orderBy('createdAt', 'desc');
+    .orderBy("createdAt", "desc");
   return rows;
 }
 
@@ -502,9 +475,7 @@ export async function getApiChangesForOwner(
   apiId: string,
   publisherId: string,
 ): Promise<ApiChangeRecord[] | null> {
-  const existing = await db<ApiRecord>('apis')
-    .where({ id: apiId, publisherId })
-    .first();
+  const existing = await db<ApiRecord>("apis").where({ id: apiId, publisherId }).first();
   if (!existing) {
     return null;
   }
@@ -630,7 +601,7 @@ export async function recordHealthCheck(
  * calls were real), plus a per-API breakdown. APIs with no calls show zeros.
  */
 export async function getPublisherAnalytics(publisherId: string) {
-  const [totals] = await db
+  const [recentTotals] = await db
     .select({
       calls: sql<number>`count(*)::int`,
       chargedCalls: sql<number>`count(*) filter (where ${apiCalls.charged})::int`,
@@ -640,7 +611,17 @@ export async function getPublisherAnalytics(publisherId: string) {
     .innerJoin(apis, eq(apiCalls.apiId, apis.id))
     .where(eq(apis.publisherId, publisherId));
 
-  const perApi = await db
+  const [rollupTotals] = await db
+    .select({
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      chargedCalls: sql<number>`coalesce(sum(${apiDailyRollups.chargedCalls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+    })
+    .from(apiDailyRollups)
+    .innerJoin(apis, eq(apiDailyRollups.apiId, apis.id))
+    .where(eq(apis.publisherId, publisherId));
+
+  const perApiRecent = await db
     .select({
       id: apis.id,
       name: apis.name,
@@ -655,12 +636,45 @@ export async function getPublisherAnalytics(publisherId: string) {
     .groupBy(apis.id)
     .orderBy(desc(apis.createdAt));
 
+  const perApiRollup = await db
+    .select({
+      id: apis.id,
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      chargedCalls: sql<number>`coalesce(sum(${apiDailyRollups.chargedCalls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+    })
+    .from(apis)
+    .leftJoin(apiDailyRollups, eq(apiDailyRollups.apiId, apis.id))
+    .where(eq(apis.publisherId, publisherId))
+    .groupBy(apis.id);
+
+  const rollupMap = new Map(perApiRollup.map((r) => [r.id, r]));
+
+  const perApi = perApiRecent.map((api) => {
+    const roll = rollupMap.get(api.id);
+    const calls = (api.calls ?? 0) + (roll?.calls ?? 0);
+    const chargedCalls = (api.chargedCalls ?? 0) + (roll?.chargedCalls ?? 0);
+    const revNum = (Number(api.revenue) || 0) + (Number(roll?.revenue) || 0);
+    return {
+      id: api.id,
+      name: api.name,
+      archivedAt: api.archivedAt,
+      calls,
+      chargedCalls,
+      revenue: revNum.toString(),
+    };
+  });
+
+  const [totalCalc] = await db.execute<{ revenue: string }>(sql`
+    SELECT (coalesce(${rollupTotals?.revenue ?? "0"}::numeric, 0) + coalesce(${recentTotals?.revenue ?? "0"}::numeric, 0))::text as revenue
+  `);
+
   return {
     totals: {
       apis: perApi.length,
-      calls: totals?.calls ?? 0,
-      chargedCalls: totals?.chargedCalls ?? 0,
-      revenue: totals?.revenue ?? "0",
+      calls: (recentTotals?.calls ?? 0) + (rollupTotals?.calls ?? 0),
+      chargedCalls: (recentTotals?.chargedCalls ?? 0) + (rollupTotals?.chargedCalls ?? 0),
+      revenue: totalCalc?.revenue ?? "0",
       currency: "USDC" as const,
     },
     apis: perApi,
@@ -668,20 +682,80 @@ export async function getPublisherAnalytics(publisherId: string) {
 }
 
 export async function getApiStats(apiId: string, range: StatsRange = {}) {
-  const [totals] = await db
+  const [recentTotals] = await db
     .select({
       calls: sql<number>`count(*)::int`,
       chargedCalls: sql<number>`count(*) filter (where ${apiCalls.charged})::int`,
       revenue: sql<string>`coalesce(sum(${apiCalls.amount}::numeric) filter (where ${apiCalls.charged}), 0)::text`,
-      uniquePayers: sql<number>`count(distinct ${apiCalls.payerAddress}) filter (where ${apiCalls.charged})::int`,
-      avgDurationMs: sql<number>`coalesce(avg(${apiCalls.durationMs}), 0)::int`,
+      totalDurationMs: sql<number>`coalesce(sum(${apiCalls.durationMs}), 0)::bigint`,
       refundedCalls: sql<number>`count(*) filter (where ${apiCalls.refundStatus} = 'refunded')::int`,
       refunded: sql<string>`coalesce(sum(${apiCalls.refundAmount}::numeric) filter (where ${apiCalls.refundStatus} = 'refunded'), 0)::text`,
-      netRevenue: sql<string>`(coalesce(sum(${apiCalls.amount}::numeric) filter (where ${apiCalls.charged}), 0) - coalesce(sum(${apiCalls.refundAmount}::numeric) filter (where ${apiCalls.refundStatus} = 'refunded'), 0))::text`,
     })
     .from(apiCalls)
     .where(statsWhere(apiId, range));
-  return { ...totals, currency: "USDC" };
+
+  const from = range.from ?? range.since;
+  const rollupConditions = [eq(apiDailyRollups.apiId, apiId)];
+  if (from) {
+    rollupConditions.push(gte(apiDailyRollups.date, from.toISOString().slice(0, 10)));
+  }
+  if (range.to) {
+    rollupConditions.push(lt(apiDailyRollups.date, range.to.toISOString().slice(0, 10)));
+  }
+
+  const [rollupTotals] = await db
+    .select({
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      chargedCalls: sql<number>`coalesce(sum(${apiDailyRollups.chargedCalls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+      totalDurationMs: sql<number>`coalesce(sum(${apiDailyRollups.totalDurationMs}), 0)::bigint`,
+      refundedCalls: sql<number>`coalesce(sum(${apiDailyRollups.refundedCalls}), 0)::int`,
+      refunded: sql<string>`coalesce(sum(${apiDailyRollups.refundedAmount}::numeric), 0)::text`,
+    })
+    .from(apiDailyRollups)
+    .where(and(...rollupConditions));
+
+  const finConditions = [eq(apiCallFinancialRecords.apiId, apiId)];
+  if (from) finConditions.push(gte(apiCallFinancialRecords.createdAt, from));
+  if (range.to) finConditions.push(lt(apiCallFinancialRecords.createdAt, range.to));
+
+  const [uniqueResult] = await db.execute<{ count: number }>(sql`
+    SELECT count(distinct payer_address)::int as count FROM (
+      SELECT ${apiCalls.payerAddress} as payer_address
+      FROM ${apiCalls}
+      WHERE ${statsWhere(apiId, range)} AND ${apiCalls.charged}
+      UNION
+      SELECT ${apiCallFinancialRecords.payerAddress} as payer_address
+      FROM ${apiCallFinancialRecords}
+      WHERE ${and(...finConditions)}
+    ) combined_payers
+  `);
+
+  const calls = (rollupTotals?.calls ?? 0) + (recentTotals?.calls ?? 0);
+  const chargedCalls = (rollupTotals?.chargedCalls ?? 0) + (recentTotals?.chargedCalls ?? 0);
+  const totalDuration =
+    Number(rollupTotals?.totalDurationMs ?? 0) + Number(recentTotals?.totalDurationMs ?? 0);
+  const avgDurationMs = calls > 0 ? Math.round(totalDuration / calls) : 0;
+  const refundedCalls = (rollupTotals?.refundedCalls ?? 0) + (recentTotals?.refundedCalls ?? 0);
+
+  const [calc] = await db.execute<{ revenue: string; refunded: string; netRevenue: string }>(sql`
+    SELECT
+      (coalesce(${rollupTotals?.revenue ?? "0"}::numeric, 0) + coalesce(${recentTotals?.revenue ?? "0"}::numeric, 0))::text as revenue,
+      (coalesce(${rollupTotals?.refunded ?? "0"}::numeric, 0) + coalesce(${recentTotals?.refunded ?? "0"}::numeric, 0))::text as refunded,
+      (coalesce(${rollupTotals?.revenue ?? "0"}::numeric, 0) + coalesce(${recentTotals?.revenue ?? "0"}::numeric, 0) - (coalesce(${rollupTotals?.refunded ?? "0"}::numeric, 0) + coalesce(${recentTotals?.refunded ?? "0"}::numeric, 0)))::text as "netRevenue"
+  `);
+
+  return {
+    calls,
+    chargedCalls,
+    revenue: calc?.revenue ?? "0",
+    uniquePayers: uniqueResult?.count ?? 0,
+    avgDurationMs,
+    refundedCalls,
+    refunded: calc?.refunded ?? "0",
+    netRevenue: calc?.netRevenue ?? "0",
+    currency: "USDC" as const,
+  };
 }
 
 /**
@@ -715,7 +789,7 @@ export async function getApiTimeSeries(
   apiId: string,
   days: 7 | 30 | 90,
 ): Promise<TimeSeriesPoint[]> {
-  const rows = await db
+  const recentRows = await db
     .select({
       date: sql<string>`to_char(date_trunc('day', ${apiCalls.createdAt} at time zone 'UTC'), 'YYYY-MM-DD')`,
       calls: sql<number>`count(*)::int`,
@@ -731,8 +805,35 @@ export async function getApiTimeSeries(
     .groupBy(sql`1`)
     .orderBy(sql`1`);
 
-  // Build a map so we can fill in missing dates with zeros.
-  const byDate = new Map(rows.map((r) => [r.date, r]));
+  const rollupRows = await db
+    .select({
+      date: apiDailyRollups.date,
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+    })
+    .from(apiDailyRollups)
+    .where(
+      and(
+        eq(apiDailyRollups.apiId, apiId),
+        sql`${apiDailyRollups.date} >= to_char(now() - interval '${sql.raw(String(days))} days', 'YYYY-MM-DD')`,
+      ),
+    )
+    .groupBy(apiDailyRollups.date)
+    .orderBy(apiDailyRollups.date);
+
+  const byDate = new Map<string, { calls: number; revenue: number }>();
+  for (const r of rollupRows) {
+    byDate.set(r.date, { calls: r.calls, revenue: Number(r.revenue) || 0 });
+  }
+  for (const r of recentRows) {
+    const existing = byDate.get(r.date);
+    if (existing) {
+      existing.calls += r.calls;
+      existing.revenue += Number(r.revenue) || 0;
+    } else {
+      byDate.set(r.date, { calls: r.calls, revenue: Number(r.revenue) || 0 });
+    }
+  }
 
   const result: TimeSeriesPoint[] = [];
   const now = new Date();
@@ -740,7 +841,7 @@ export async function getApiTimeSeries(
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i));
     const dateStr = d.toISOString().slice(0, 10);
     const row = byDate.get(dateStr);
-    result.push({ date: dateStr, calls: row?.calls ?? 0, revenue: row?.revenue ?? "0" });
+    result.push({ date: dateStr, calls: row?.calls ?? 0, revenue: (row?.revenue ?? 0).toString() });
   }
   return result;
 }
