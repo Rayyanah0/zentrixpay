@@ -56,3 +56,32 @@ describe("time-based access passes", () => {
     expect(res.locals.freeCall).toBe(false);
   });
 });
+
+describe("daily free call quota", () => {
+  beforeEach(() => {
+    state.rows = [];
+    state.payer = "GPAYER";
+  });
+
+  it("N free calls per wallet per day: calls under quota skip the paywall", async () => {
+    state.rows.push([{ count: 2 }]);
+    const { res, next } = await run({ id: "api-1", freeCallsPerDay: 3 }, { "x-payment": "sig" });
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.locals.freeCall).toBe(true);
+  });
+
+  it("then 402: once the quota is used up the request reaches the paywall", async () => {
+    state.rows.push([{ count: 3 }]);
+    const { res, next } = await run({ id: "api-1", freeCallsPerDay: 3 }, { "x-payment": "sig" });
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.locals.freeCall).toBe(false);
+  });
+
+  it("resets at the UTC day boundary: the count for the new day starts at zero", async () => {
+    // The SQL filters on date_trunc('day', now() at time zone 'UTC'), so
+    // yesterday's calls drop out of the count and the next call is free again.
+    state.rows.push([{ count: 0 }]);
+    const { res } = await run({ id: "api-1", freeCallsPerDay: 3 }, { "x-payment": "sig" });
+    expect(res.locals.freeCall).toBe(true);
+  });
+});
