@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import {
   HTTP_METHODS,
   createApi,
+  downloadApiCallsCsv,
   downloadPayoutsCsv,
   fetchApiStats,
   fetchMyApis,
@@ -871,6 +872,13 @@ function ApiCard({
           }
         >
           {stats ? "Hide stats" : busy === "Stats" ? "Loading…" : "Stats"}
+        </button>
+        <button
+          className={secondaryButton}
+          disabled={busy !== null}
+          onClick={() => run("Export", () => downloadApiCallsCsv(apiKey, api.id))}
+        >
+          {busy === "Export" ? "Exporting…" : "Export calls CSV"}
         </button>
       </div>
 

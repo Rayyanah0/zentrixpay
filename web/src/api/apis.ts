@@ -247,6 +247,15 @@ export async function downloadPayoutsCsv(apiKey: string, range: PayoutRange = {}
   return downloadCsv(apiKey, `/publishers/me/payouts${payoutsQuery(range, "csv")}`, "payouts.csv");
 }
 
+/** Download an API's call history as CSV (streamed by the server), optionally within a window. */
+export async function downloadApiCallsCsv(
+  apiKey: string,
+  apiId: string,
+  range: PayoutRange = {},
+): Promise<void> {
+  return downloadCsv(apiKey, `/apis/${encodeURIComponent(apiId)}/calls.csv${payoutsQuery(range)}`, `api-${apiId}-calls.csv`);
+}
+
 export async function createApi(apiKey: string, input: ApiInput): Promise<OwnerApi> {
   return readJson(
     await signedPublisherFetch(absolute("/apis"), apiKey, {

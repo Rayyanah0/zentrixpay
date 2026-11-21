@@ -8,6 +8,7 @@ import express, {
 } from "express";
 import multer from "multer";
 import { apiKeyAuth } from "../middleware/apiKeyAuth.js";
+import { writeCallsCsv } from "../services/apiCallsExport.js";
 import { requestSignatureAuth } from "../middleware/requestSignatureAuth.js";
 import { payeeSignatureAuth } from "../middleware/payeeSignatureAuth.js";
 import { validate } from "../middleware/validate.js";
@@ -274,6 +275,33 @@ router.get("/apis/:id/stats", apiKeyAuth, async (req, res) => {
     });
   } catch (err) {
     sendServiceError(res, err);
+  }
+});
+
+// GET /apis/:id/calls.csv?from&to — streamed CSV of the call history (owner only)
+router.get("/apis/:id/calls.csv", apiKeyAuth, async (req, res) => {
+  const query = apiStatsQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    res.status(400).json({ error: query.error.format() });
+    return;
+  }
+  let api;
+  try {
+    api = await getOwnedApi(req.params.id as string, req.publisher!.id, { includeArchived: true });
+  } catch (err) {
+    sendServiceError(res, err);
+    return;
+  }
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="api-${api.id}-calls.csv"`);
+  res.setHeader("Cache-Control", "no-store");
+  res.flushHeaders();
+  try {
+    await writeCallsCsv(res, api.id, { from: query.data.from, to: query.data.to });
+    res.end();
+  } catch (err) {
+    getLogger().error({ event: "api_calls_export_failed", apiId: api.id, err }, "CSV export failed");
+    res.destroy(err instanceof Error ? err : undefined);
   }
 });
 
