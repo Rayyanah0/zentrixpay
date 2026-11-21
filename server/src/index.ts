@@ -37,9 +37,16 @@ const server: Server = app.listen(config.PORT, () => {
     "ZentrixPay server started",
   );
 
-  startHealthCheckWorker();
-  startApiCallRetentionWorker();
-  startApiCallRecoveryWorker();
+  if (config.RUN_BACKGROUND_WORKERS) {
+    startHealthCheckWorker();
+    startApiCallRetentionWorker();
+    startApiCallRecoveryWorker();
+  } else {
+    rootLogger.info(
+      { event: "background_workers_disabled" },
+      "RUN_BACKGROUND_WORKERS=false; background workers not started on this instance",
+    );
+  }
   startPoolMetrics();
 });
 

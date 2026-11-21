@@ -1,5 +1,6 @@
 import { config } from "../config.js";
-import { db } from "../db/client.js";
+import { db, pgClient } from "../db/client.js";
+import { runWithAdvisoryLock, WORKER_LOCK_KEYS } from "../lib/workerLock.js";
 import { getLogger } from "../lib/logger.js";
 import { purgeExpiredApiCalls } from "../services/apiCallRetention.js";
 
@@ -40,20 +41,22 @@ export async function runApiCallRetention(): Promise<void> {
   if (running) return;
   running = true;
   try {
-    const deleted = await purgeExpiredApiCalls(db, {
-      retentionDays: config.API_CALL_RETENTION_DAYS,
-      batchSize: config.API_CALL_RETENTION_BATCH_SIZE,
+    await runWithAdvisoryLock(pgClient, WORKER_LOCK_KEYS.apiCallRetention, async () => {
+      const deleted = await purgeExpiredApiCalls(db, {
+        retentionDays: config.API_CALL_RETENTION_DAYS,
+        batchSize: config.API_CALL_RETENTION_BATCH_SIZE,
+      });
+      if (deleted > 0) {
+        getLogger().info(
+          {
+            event: "api_calls_purged",
+            deleted,
+            retentionDays: config.API_CALL_RETENTION_DAYS,
+          },
+          "deleted expired API call records",
+        );
+      }
     });
-    if (deleted > 0) {
-      getLogger().info(
-        {
-          event: "api_calls_purged",
-          deleted,
-          retentionDays: config.API_CALL_RETENTION_DAYS,
-        },
-        "deleted expired API call records",
-      );
-    }
   } catch (err) {
     getLogger().error({ event: "api_call_retention_error", err }, "API call retention run failed");
   } finally {

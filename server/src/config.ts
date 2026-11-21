@@ -133,6 +133,10 @@ const envSchema = z.object({
   HEALTH_CHECK_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
   HEALTH_CHECK_FAILURE_THRESHOLD: z.coerce.number().int().min(1).default(3),
 
+  // Background workers (health checks, retention, recovery, webhook delivery)
+  // start only when this is true. Set false on API-only instances (#207).
+  RUN_BACKGROUND_WORKERS: envBoolean(true),
+
   // Provider webhooks for charged calls (#36). Delays between attempts grow
   // as WEBHOOK_RETRY_BASE_MS * 4^n.
   WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),

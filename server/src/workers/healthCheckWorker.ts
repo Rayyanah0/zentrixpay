@@ -1,4 +1,6 @@
 import { config, upstreamKeyRing } from "../config.js";
+import { pgClient } from "../db/client.js";
+import { runWithAdvisoryLock, WORKER_LOCK_KEYS } from "../lib/workerLock.js";
 import { getLogger } from "../lib/logger.js";
 import { sendUpstream } from "../lib/upstreamClient.js";
 import { decryptSecret } from "../utils/secretBox.js";
@@ -14,7 +16,9 @@ import {
 // marked unhealthy, which hides it from GET /apis and makes the proxy answer
 // 503 before asking for payment. One successful check brings it back.
 //
-// Runs in every replica; checks are idempotent, so duplicates only add load.
+// Runs in every replica, but each tick takes a Postgres advisory lock first
+// (#207), so across N instances a tick runs once and health_failures updates
+// do not race. Set RUN_BACKGROUND_WORKERS=false on API-only instances.
 
 const CONCURRENCY = 5;
 
@@ -84,6 +88,16 @@ async function tick(): Promise<void> {
   if (running) return;
   running = true;
   try {
+    await runWithAdvisoryLock(pgClient, WORKER_LOCK_KEYS.healthCheck, runHealthChecks);
+  } catch (err) {
+    getLogger().error({ event: "health_worker_tick_error", err }, "health worker tick failed");
+  } finally {
+    running = false;
+  }
+}
+
+async function runHealthChecks(): Promise<void> {
+  try {
     const queue = await listApisForHealthCheck();
     const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
       for (let api = queue.shift(); api; api = queue.shift()) {
@@ -98,7 +112,5 @@ async function tick(): Promise<void> {
     await Promise.all(workers);
   } catch (err) {
     getLogger().error({ event: "health_worker_tick_error", err }, "health worker tick failed");
-  } finally {
-    running = false;
   }
 }
