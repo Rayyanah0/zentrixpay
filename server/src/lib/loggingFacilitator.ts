@@ -6,6 +6,7 @@ import type {
   VerifyResponse,
 } from "@x402/core/types";
 import { getLogger } from "./logger.js";
+import { gatewaySettlementFailures } from "./metrics.js";
 
 function summarizeVerify(result: VerifyResponse): Record<string, unknown> {
   const r = result as VerifyResponse & {
@@ -78,8 +79,10 @@ export function createLoggingFacilitatorClient(url: string): HTTPFacilitatorClie
           { event: "x402_settle", phase: "complete", network, ...summarizeSettle(result) },
           "x402 settle",
         );
+        if (result.success === false) gatewaySettlementFailures.inc();
         return result;
       } catch (err) {
+        gatewaySettlementFailures.inc();
         log.error({ event: "x402_settle", phase: "error", network, err }, "x402 settle failed");
         throw err;
       }
