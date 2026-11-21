@@ -81,4 +81,61 @@ describe("API credit spend signatures", () => {
       error: "signature_mismatch",
     });
   });
+
+  it("binds the query string: a signed URL cannot be replayed with other query parameters", () => {
+    const keypair = Keypair.random();
+    const nowMs = Date.now();
+    const base = {
+      walletAddress: keypair.publicKey(),
+      apiId: "api1",
+      method: "GET",
+      timestamp: String(Math.floor(nowMs / 1000)),
+      nonce: "nonce-query-000001",
+      bodyHash: apiCreditRequestBodyHash(undefined),
+    };
+    const path = "/api/api1/search?q=weather&limit=5";
+    const signature = keypair
+      .sign(Buffer.from(buildApiCreditSpendMessage({ ...base, path })))
+      .toString("base64");
+    const request = { ...base, path, signature, nowMs, maxSkewMs: 300_000 };
+
+    expect(verifyApiCreditSpendSignature(request)).toEqual({ ok: true });
+    expect(
+      verifyApiCreditSpendSignature({ ...request, path: "/api/api1/search?q=weather&limit=500" }),
+    ).toEqual({ ok: false, error: "signature_mismatch" });
+    expect(
+      verifyApiCreditSpendSignature({ ...request, path: "/api/api1/search?q=weather" }),
+    ).toEqual({ ok: false, error: "signature_mismatch" });
+    expect(verifyApiCreditSpendSignature({ ...request, path: "/api/api1/search" })).toEqual({
+      ok: false,
+      error: "signature_mismatch",
+    });
+  });
+
+  it("treats reordered query parameters as the same canonical query", () => {
+    const keypair = Keypair.random();
+    const nowMs = Date.now();
+    const base = {
+      walletAddress: keypair.publicKey(),
+      apiId: "api1",
+      method: "GET",
+      timestamp: String(Math.floor(nowMs / 1000)),
+      nonce: "nonce-query-000002",
+      bodyHash: apiCreditRequestBodyHash(undefined),
+    };
+    const signedPath = "/api/api1/search?q=weather&limit=5";
+    const signature = keypair
+      .sign(Buffer.from(buildApiCreditSpendMessage({ ...base, path: signedPath })))
+      .toString("base64");
+
+    expect(
+      verifyApiCreditSpendSignature({
+        ...base,
+        path: "/api/api1/search?limit=5&q=weather",
+        signature,
+        nowMs,
+        maxSkewMs: 300_000,
+      }),
+    ).toEqual({ ok: true });
+  });
 });

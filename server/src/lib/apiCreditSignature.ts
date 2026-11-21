@@ -30,6 +30,27 @@ export function sep53MessageDigest(message: Buffer): Buffer {
  * (ed25519 over the bytes) or per SEP-53 (ed25519 over sha256 of the prefixed
  * bytes, as wallets do). Fields are joined with "\n" in this order.
  */
+export const API_CREDIT_SPEND_MESSAGE_TAG = "zentrixpay:api-credit-spend:v2";
+
+/**
+ * Canonical form of a request query string: parameters sorted by name then
+ * value, re-encoded, without the leading "?". Reordered parameters therefore
+ * sign the same, while any change to a name or value changes the signature.
+ */
+export function canonicalQueryString(query: string): string {
+  const params = new URLSearchParams(query);
+  const entries = [...params.entries()].sort(([a, av], [b, bv]) =>
+    a === b ? (av < bv ? -1 : av > bv ? 1 : 0) : a < b ? -1 : 1,
+  );
+  return new URLSearchParams(entries).toString();
+}
+
+/**
+ * The signed credit-spend message (version v2). Fields are joined with "\n":
+ * tag, wallet, apiId, METHOD, path (without query), canonical query, timestamp,
+ * nonce, body hash. The query string is signed explicitly so a signature for
+ * one URL cannot be replayed with different query parameters.
+ */
 export function buildApiCreditSpendMessage(input: {
   walletAddress: string;
   apiId: string;
@@ -39,12 +60,16 @@ export function buildApiCreditSpendMessage(input: {
   nonce: string;
   bodyHash: string;
 }): string {
+  const queryIndex = input.path.indexOf("?");
+  const pathname = queryIndex === -1 ? input.path : input.path.slice(0, queryIndex);
+  const query = queryIndex === -1 ? "" : canonicalQueryString(input.path.slice(queryIndex + 1));
   return [
-    "zentrixpay:api-credit-spend",
+    API_CREDIT_SPEND_MESSAGE_TAG,
     input.walletAddress,
     input.apiId,
     input.method.toUpperCase(),
-    input.path,
+    pathname,
+    query,
     input.timestamp,
     input.nonce,
     input.bodyHash,
