@@ -25,13 +25,20 @@ vi.mock("../lib/payer.js", () => ({
   }),
 }));
 
-import { checkPayerAccess } from "./apiPaywall.js";
+import { checkPayerAccess, checkPayerAllowDeny } from "./apiPaywall.js";
 
 function run(api: Record<string, unknown>, headers: Record<string, unknown> = {}) {
   const res = { locals: { api }, status: vi.fn(() => res), json: vi.fn(() => res) } as any;
   const next = vi.fn();
   const req = { headers } as any;
-  return checkPayerAccess(req, res, next).then(() => ({ res, next }));
+  return Promise.resolve(checkPayerAccess(req, res, next)).then(() => ({ res, next }));
+}
+
+function runAllowDeny(api: Record<string, unknown>, headers: Record<string, unknown> = {}) {
+  const res = { locals: { api }, status: vi.fn(() => res), json: vi.fn(() => res) } as any;
+  const next = vi.fn();
+  checkPayerAllowDeny({ headers } as any, res, next);
+  return { res, next };
 }
 
 describe("time-based access passes", () => {
@@ -83,5 +90,40 @@ describe("daily free call quota", () => {
     state.rows.push([{ count: 0 }]);
     const { res } = await run({ id: "api-1", freeCallsPerDay: 3 }, { "x-payment": "sig" });
     expect(res.locals.freeCall).toBe(true);
+  });
+});
+
+describe("payer allow and deny lists", () => {
+  beforeEach(() => {
+    state.rows = [];
+    state.payer = "GDENIED";
+  });
+
+  it("denied wallets get 403 before payment is required", async () => {
+    const { res, next } = runAllowDeny(
+      { id: "api-1", payerDenylist: ["GDENIED"], payerAllowlist: null },
+      { "x-payment": "sig" },
+    );
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("allowlists restrict access: wallets not on the list get 403", async () => {
+    state.payer = "GOTHER";
+    const { res, next } = runAllowDeny(
+      { id: "api-1", payerDenylist: [], payerAllowlist: ["GALLOWED"] },
+      { "x-payment": "sig" },
+    );
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("allowlisted wallets pass through", async () => {
+    state.payer = "GALLOWED";
+    const { next } = runAllowDeny(
+      { id: "api-1", payerDenylist: [], payerAllowlist: ["GALLOWED"] },
+      { "x-payment": "sig" },
+    );
+    expect(next).toHaveBeenCalledOnce();
   });
 });
