@@ -153,3 +153,11 @@ Compute `HMAC-SHA256(secret, "1700000000." + body)`; the hex result is the `v1` 
 ## Rotating the secret
 
 Owners rotate a signing secret with `POST /apis/:id/webhook/secret/rotate`. The response carries the new secret once. For 24 hours after a rotation, deliveries carry two `v1=` values, one per secret, so either secret verifies. Switch your receiver to the new secret, then call `POST /apis/:id/webhook/secret/expire` to end the grace period early. After it ends, only the new secret signs.
+
+## Delivery log, test ping and redelivery
+
+Owners can inspect and retry deliveries. All three endpoints are owner-only; another publisher gets `404`.
+
+- `GET /apis/:id/webhooks/deliveries` lists the last 100 deliveries with status (`pending`, `delivered`, `failed`), attempts and last error. The log is kept in memory, so it resets when the server restarts.
+- `POST /apis/:id/webhooks/test` sends one signed `webhook.test` ping, with no retries, and returns its result.
+- `POST /apis/:id/webhooks/deliveries/:deliveryId/redeliver` re-sends a logged event with the same event id and body and a fresh signature. It answers `202` and the attempt runs in the background.
