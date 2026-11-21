@@ -110,3 +110,13 @@ export const gatewayCreditSpends = new Counter({
   help: "Charged proxied calls paid from prepaid API credits",
   registers: [metricsRegistry],
 });
+
+// Facilitator calls (#219). `outcome` is ok, rejected (the facilitator answered
+// that the payment is invalid) or error (the call itself failed). `reason`
+// tells outages apart: unreachable, facilitator_5xx, facilitator_4xx, other.
+export const gatewayFacilitatorRequests = new Counter({
+  name: "zentrixpay_facilitator_requests_total",
+  help: "x402 facilitator calls by operation, outcome and failure reason",
+  labelNames: ["operation", "outcome", "reason"] as const,
+  registers: [metricsRegistry],
+});
