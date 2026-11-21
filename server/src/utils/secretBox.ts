@@ -46,7 +46,8 @@ export function parseKeyRing(raw: string | undefined): KeyRingEntry[] {
     .filter(Boolean)
     .map((entry) => {
       const idx = entry.indexOf(":");
-      if (idx === -1) throw new Error(`Invalid UPSTREAM_SECRET_KEYS entry: "${entry}" (expected id:hex)`);
+      if (idx === -1)
+        throw new Error(`Invalid UPSTREAM_SECRET_KEYS entry: "${entry}" (expected id:hex)`);
       const id = entry.slice(0, idx).trim();
       const hex = entry.slice(idx + 1).trim();
       if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
@@ -103,7 +104,13 @@ function encryptV2(plaintext: string, keyId: string, hexKey: string): string {
   const cipher = createCipheriv("aes-256-gcm", keyFromHex(hexKey), iv);
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return [V2, keyId, iv.toString("base64"), tag.toString("base64"), ciphertext.toString("base64")].join(":");
+  return [
+    V2,
+    keyId,
+    iv.toString("base64"),
+    tag.toString("base64"),
+    ciphertext.toString("base64"),
+  ].join(":");
 }
 
 // ── Decryption ────────────────────────────────────────────────────────────────
@@ -136,7 +143,10 @@ export function decryptSecret(
     const hexKey =
       typeof hexKeyOrRing === "string"
         ? hexKeyOrRing
-        : (fallbackHexKey ?? (() => { throw new Error("v1 ciphertext requires a fallback hex key"); })());
+        : (fallbackHexKey ??
+          (() => {
+            throw new Error("v1 ciphertext requires a fallback hex key");
+          })());
     return decryptV1(iv, tag, ciphertext, hexKey);
   }
 
@@ -172,7 +182,13 @@ function decryptV1(iv: string, tag: string, ciphertext: string, hexKey: string):
   ]).toString("utf8");
 }
 
-function decryptV2(_keyId: string, iv: string, tag: string, ciphertext: string, key: Buffer): string {
+function decryptV2(
+  _keyId: string,
+  iv: string,
+  tag: string,
+  ciphertext: string,
+  key: Buffer,
+): string {
   const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64"));
   decipher.setAuthTag(Buffer.from(tag, "base64"));
   return Buffer.concat([

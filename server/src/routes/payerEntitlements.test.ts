@@ -30,7 +30,11 @@ vi.mock("../db/client.js", () => {
 });
 
 import { walletSignatureAuth } from "../middleware/walletSignatureAuth.js";
-import { buildWalletAuthMessage, sep53Digest, verifyWalletAuthSignature } from "../lib/walletSignature.js";
+import {
+  buildWalletAuthMessage,
+  sep53Digest,
+  verifyWalletAuthSignature,
+} from "../lib/walletSignature.js";
 import { listPayerEntitlements } from "../services/payerEntitlements.js";
 
 const wallet = Keypair.random();
@@ -68,18 +72,33 @@ describe("verifyWalletAuthSignature", () => {
   it("accepts raw and SEP-53 (Freighter) signatures", () => {
     const sig = sign(wallet);
     const nowMs = Number(sig.timestamp) * 1000;
-    expect(verifyWalletAuthSignature({ ...base, timestamp: sig.timestamp, signature: sig.raw, nowMs })).toEqual({ ok: true });
-    expect(verifyWalletAuthSignature({ ...base, timestamp: sig.timestamp, signature: sig.sep53, nowMs })).toEqual({ ok: true });
+    expect(
+      verifyWalletAuthSignature({ ...base, timestamp: sig.timestamp, signature: sig.raw, nowMs }),
+    ).toEqual({ ok: true });
+    expect(
+      verifyWalletAuthSignature({ ...base, timestamp: sig.timestamp, signature: sig.sep53, nowMs }),
+    ).toEqual({ ok: true });
   });
 
   it("rejects stale timestamps and signatures for another path", () => {
     const sig = sign(wallet);
     const nowMs = Number(sig.timestamp) * 1000;
     expect(
-      verifyWalletAuthSignature({ ...base, timestamp: sig.timestamp, signature: sig.raw, nowMs: nowMs + 3_600_000 }),
+      verifyWalletAuthSignature({
+        ...base,
+        timestamp: sig.timestamp,
+        signature: sig.raw,
+        nowMs: nowMs + 3_600_000,
+      }),
     ).toEqual({ ok: false, error: "expired_timestamp" });
     expect(
-      verifyWalletAuthSignature({ ...base, path: "/payers/x/calls", timestamp: sig.timestamp, signature: sig.raw, nowMs }),
+      verifyWalletAuthSignature({
+        ...base,
+        path: "/payers/x/calls",
+        timestamp: sig.timestamp,
+        signature: sig.raw,
+        nowMs,
+      }),
     ).toEqual({ ok: false, error: "signature_mismatch" });
   });
 });

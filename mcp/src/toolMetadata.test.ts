@@ -71,5 +71,4 @@ describe("MCP tool metadata", () => {
       }
     }
   });
-
 });

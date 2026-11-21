@@ -421,7 +421,10 @@ describe("startServer", () => {
   it("connects to the given transport", async () => {
     const [, serverTransport] = InMemoryTransport.createLinkedPair();
 
-    const running = await startServer(createZentrixPayServer(behaviour()), serverTransport as never);
+    const running = await startServer(
+      createZentrixPayServer(behaviour()),
+      serverTransport as never,
+    );
 
     expect(running.stopped).toBe(false);
     await running.shutdown("test");

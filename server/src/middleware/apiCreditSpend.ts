@@ -1,6 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
 import { config } from "../config.js";
-import { apiCreditRequestBodyHash, verifyApiCreditSpendSignature } from "../lib/apiCreditSignature.js";
+import {
+  apiCreditRequestBodyHash,
+  verifyApiCreditSpendSignature,
+} from "../lib/apiCreditSignature.js";
 import { resolveApiPrice } from "./apiPaywall.js";
 
 // Simple in‑memory store for daily spend limits per wallet per API.

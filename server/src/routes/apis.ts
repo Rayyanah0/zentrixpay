@@ -98,22 +98,36 @@ function sendServiceError(res: Response, err: unknown): void {
 // ── Management ────────────────────────────────────────────────────────────────
 
 // POST /apis/import/preview — validate and group an OpenAPI JSON/YAML document without writes.
-router.post("/apis/import/preview", apiKeyAuth, openApiUpload.single("document"), async (req, res) => {
-  const raw = req.file?.buffer.toString("utf8") ?? req.body?.document ?? req.body?.openapiSpec;
-  if (!raw) {
-    res.status(400).json({ error: "Provide document as JSON/YAML text, document, or openapiSpec" });
-    return;
-  }
-  const result = previewBulkOpenApi(raw);
-  res.status(result.errors.length > 0 ? 422 : 200).json({ groups: result.groups, errors: result.errors });
-});
+router.post(
+  "/apis/import/preview",
+  apiKeyAuth,
+  openApiUpload.single("document"),
+  async (req, res) => {
+    const raw = req.file?.buffer.toString("utf8") ?? req.body?.document ?? req.body?.openapiSpec;
+    if (!raw) {
+      res
+        .status(400)
+        .json({ error: "Provide document as JSON/YAML text, document, or openapiSpec" });
+      return;
+    }
+    const result = previewBulkOpenApi(raw);
+    res
+      .status(result.errors.length > 0 ? 422 : 200)
+      .json({ groups: result.groups, errors: result.errors });
+  },
+);
 
 // POST /apis/import — confirm selected preview groups and register them atomically.
 router.post("/apis/import", apiKeyAuth, openApiUpload.single("document"), async (req, res) => {
   const raw = req.file?.buffer.toString("utf8") ?? req.body?.document ?? req.body?.openapiSpec;
   const defaults = req.body?.defaults ?? req.body;
   if (!raw || typeof defaults?.price !== "string") {
-    res.status(400).json({ error: "document and defaults.price are required; walletAddress defaults to the publisher wallet" });
+    res
+      .status(400)
+      .json({
+        error:
+          "document and defaults.price are required; walletAddress defaults to the publisher wallet",
+      });
     return;
   }
   const selected = Array.isArray(req.body?.groups) ? req.body.groups : undefined;
@@ -125,7 +139,9 @@ router.post("/apis/import", apiKeyAuth, openApiUpload.single("document"), async 
     });
     res.status(201).json(result);
   } catch (error) {
-    res.status(422).json({ error: error instanceof Error ? error.message : "OpenAPI import failed" });
+    res
+      .status(422)
+      .json({ error: error instanceof Error ? error.message : "OpenAPI import failed" });
   }
 });
 
@@ -588,8 +604,7 @@ async function proxyHandler(req: Request, res: Response) {
   } satisfies StoredProxyResponse;
 
   const completeProxyIdempotency = res.locals.completeProxyIdempotency as
-    | ((response: StoredProxyResponse) => Promise<void>)
-    | undefined;
+    ((response: StoredProxyResponse) => Promise<void>) | undefined;
   if (completeProxyIdempotency && upstream.status < 400) {
     res.locals.preserveProxyIdempotencyClaim = true;
     await completeProxyIdempotency({

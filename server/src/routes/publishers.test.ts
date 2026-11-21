@@ -272,8 +272,22 @@ describe("GET /publishers/me/analytics — API analytics (#10)", () => {
     const analytics = {
       totals: { apis: 2, calls: 15, chargedCalls: 12, revenue: "1.2", currency: "USDC" },
       apis: [
-        { id: "api-1", name: "Weather", archivedAt: null, calls: 10, chargedCalls: 8, revenue: "0.8" },
-        { id: "api-2", name: "Quotes", archivedAt: null, calls: 5, chargedCalls: 4, revenue: "0.4" },
+        {
+          id: "api-1",
+          name: "Weather",
+          archivedAt: null,
+          calls: 10,
+          chargedCalls: 8,
+          revenue: "0.8",
+        },
+        {
+          id: "api-2",
+          name: "Quotes",
+          archivedAt: null,
+          calls: 5,
+          chargedCalls: 4,
+          revenue: "0.4",
+        },
       ],
     };
     mockGetPublisherAnalytics.mockResolvedValue(analytics);
@@ -293,9 +307,12 @@ describe("removed resource-era endpoints (#10)", () => {
     publishersLookupRows = [authedPublisher];
   });
 
-  it.each(["/publishers/me/resources", "/publishers/leaderboard"])("%s returns 404", async (path) => {
-    const res = await request(createTestApp()).get(path).set("x-api-key", VALID_API_KEY);
+  it.each(["/publishers/me/resources", "/publishers/leaderboard"])(
+    "%s returns 404",
+    async (path) => {
+      const res = await request(createTestApp()).get(path).set("x-api-key", VALID_API_KEY);
 
-    expect(res.status).toBe(404);
-  });
+      expect(res.status).toBe(404);
+    },
+  );
 });

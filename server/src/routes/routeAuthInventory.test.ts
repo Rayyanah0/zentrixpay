@@ -77,7 +77,10 @@ function collectRoutes(stack: Layer[], out: DiscoveredRoute[]): DiscoveredRoute[
 }
 
 function discoverRoutes(): DiscoveredRoute[] {
-  const app = createApp() as unknown as { router?: { stack: Layer[] }; _router?: { stack: Layer[] } };
+  const app = createApp() as unknown as {
+    router?: { stack: Layer[] };
+    _router?: { stack: Layer[] };
+  };
   const router = app.router ?? app._router;
   if (!router) throw new Error("Could not find the Express router stack on the app");
   return collectRoutes(router.stack, []);

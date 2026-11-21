@@ -53,8 +53,7 @@ vi.mock("@zentrixpay/registry-client", async (importOriginal) => {
 // delay, so these run without real sleeping.
 process.env.ZENTRIXPAY_RETRY_ATTEMPTS = "3";
 
-const { walletInfo, txStatus, networkProfile, _setAgentWallet } =
-  await import("./index.js");
+const { walletInfo, txStatus, networkProfile, _setAgentWallet } = await import("./index.js");
 
 function mockResponse(data: unknown, ok = true, status = 200, headers?: Record<string, string>) {
   return {
@@ -77,7 +76,6 @@ afterEach(() => {
 });
 
 describe("idempotent reads retry", () => {
-
   it("retries Horizon balance reads", async () => {
     _setAgentWallet(testWallet);
     const fetchMock = vi

@@ -54,7 +54,12 @@ describe("CallerEntitlements", () => {
             },
           ],
           credits: [
-            { apiId: "api-2", apiName: "Geocoder", balance: 25, updatedAt: "2026-11-21T09:00:00.000Z" },
+            {
+              apiId: "api-2",
+              apiName: "Geocoder",
+              balance: 25,
+              updatedAt: "2026-11-21T09:00:00.000Z",
+            },
           ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -73,7 +78,9 @@ describe("CallerEntitlements", () => {
     const [message, signedFor] = signer.mock.calls[0];
     expect(signedFor).toBe(ADDRESS);
     expect(message).toMatch(
-      new RegExp(`^zentrixpay:wallet-auth\\nGET\\n/payers/${ADDRESS}/entitlements\\n${ADDRESS}\\n\\d+$`),
+      new RegExp(
+        `^zentrixpay:wallet-auth\\nGET\\n/payers/${ADDRESS}/entitlements\\n${ADDRESS}\\n\\d+$`,
+      ),
     );
 
     const [url, init] = mockFetch.mock.calls[0];

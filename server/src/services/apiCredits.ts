@@ -16,10 +16,7 @@ export async function getApiCreditBalance(apiId: string, walletAddress: string):
     .select({ balance: apiCreditBalances.balance })
     .from(apiCreditBalances)
     .where(
-      and(
-        eq(apiCreditBalances.apiId, apiId),
-        eq(apiCreditBalances.walletAddress, walletAddress),
-      ),
+      and(eq(apiCreditBalances.apiId, apiId), eq(apiCreditBalances.walletAddress, walletAddress)),
     )
     .limit(1);
   return row?.balance ?? 0;

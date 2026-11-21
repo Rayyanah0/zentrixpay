@@ -84,8 +84,8 @@ function RememberKeyOption({
         Remember this key on this device
       </label>
       <p id={`${id}-hint`} className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-        By default the key is kept only for this browser tab and forgotten when it closes. Only
-        tick this on a device you trust — a remembered key stays until you sign out.
+        By default the key is kept only for this browser tab and forgotten when it closes. Only tick
+        this on a device you trust — a remembered key stays until you sign out.
       </p>
     </div>
   );

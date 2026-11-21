@@ -52,7 +52,6 @@ describe("structured tools advertise a schema", () => {
       expect(tool.outputSchema, `${tool.name} should advertise outputSchema`).toBeDefined();
     }
   });
-
 });
 
 describe("representative payloads match advertised required keys", () => {

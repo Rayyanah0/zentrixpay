@@ -52,9 +52,7 @@ const h = vi.hoisted(() => {
       get(_target, prop) {
         if (prop === "then") {
           return (onOk: (v: Row[]) => unknown, onErr: (e: unknown) => unknown) =>
-            Promise.resolve()
-              .then(resolve)
-              .then(onOk, onErr);
+            Promise.resolve().then(resolve).then(onOk, onErr);
         }
         return (...args: unknown[]) => {
           if (prop === "from" && table === undefined) table = args[0];
@@ -197,7 +195,12 @@ describe("paywall security regressions (#293)", () => {
     it("does not let a header that merely names a pass holder skip the paywall", async () => {
       h.payer = { address: VICTIM, signed: false };
       h.state.rows.set(apiPasses, [
-        { id: "pass-1", apiId: API_ID, payerAddress: VICTIM, expiresAt: new Date(Date.now() + 3_600_000) },
+        {
+          id: "pass-1",
+          apiId: API_ID,
+          payerAddress: VICTIM,
+          expiresAt: new Date(Date.now() + 3_600_000),
+        },
       ]);
 
       const res = await request(createApp())
@@ -352,9 +355,12 @@ describe("paywall security regressions (#293)", () => {
       const toB = signedChange(walletA, walletB.publicKey());
       const backToA = signedChange(walletB, walletA.publicKey());
 
-      expect((await request(app).patch(`/apis/${API_ID}`).set(toB.headers).send(toB.body)).status).toBe(200);
       expect(
-        (await request(app).patch(`/apis/${API_ID}`).set(backToA.headers).send(backToA.body)).status,
+        (await request(app).patch(`/apis/${API_ID}`).set(toB.headers).send(toB.body)).status,
+      ).toBe(200);
+      expect(
+        (await request(app).patch(`/apis/${API_ID}`).set(backToA.headers).send(backToA.body))
+          .status,
       ).toBe(200);
 
       const replay = await request(app).patch(`/apis/${API_ID}`).set(toB.headers).send(toB.body);

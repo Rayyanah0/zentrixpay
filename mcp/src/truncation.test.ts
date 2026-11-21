@@ -64,7 +64,9 @@ describe("truncateResponse", () => {
 
 describe("assertToolDescriptionSafe", () => {
   it("does not throw for a short description", () => {
-    expect(() => assertToolDescriptionSafe("zentrixpay_test", "A short description.")).not.toThrow();
+    expect(() =>
+      assertToolDescriptionSafe("zentrixpay_test", "A short description."),
+    ).not.toThrow();
   });
 
   it("does not throw for a description exactly at the limit", () => {

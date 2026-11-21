@@ -59,7 +59,9 @@ export async function listPayerEntitlements(
       })
       .from(apiCreditBalances)
       .innerJoin(apis, eq(apis.id, apiCreditBalances.apiId))
-      .where(and(eq(apiCreditBalances.walletAddress, walletAddress), gt(apiCreditBalances.balance, 0)))
+      .where(
+        and(eq(apiCreditBalances.walletAddress, walletAddress), gt(apiCreditBalances.balance, 0)),
+      )
       .orderBy(asc(apis.name)),
   ]);
 

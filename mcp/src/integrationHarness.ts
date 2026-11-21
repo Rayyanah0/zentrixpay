@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -31,11 +31,11 @@ export interface StartIntegrationHarnessOptions {
 export async function startIntegrationHarness(
   options: StartIntegrationHarnessOptions = {},
 ): Promise<IntegrationHarness> {
-  const entry = resolve(__dirname, 'index.js');
+  const entry = resolve(__dirname, "index.js");
 
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
-    ZENTRIXPAY_MOCK: '1',
+    ZENTRIXPAY_MOCK: "1",
     ...(options.env ?? {}),
   };
 
@@ -44,11 +44,11 @@ export async function startIntegrationHarness(
     args: options.args ?? [entry],
     cwd: options.cwd ?? __dirname,
     env,
-    stderr: 'pipe',
+    stderr: "pipe",
   });
 
   const client = new Client(
-    { name: 'zentrixpay-integration-harness', version: '1.0.0' },
+    { name: "zentrixpay-integration-harness", version: "1.0.0" },
     { capabilities: {} },
   );
 
@@ -65,17 +65,17 @@ export async function startIntegrationHarness(
 /** Extracts the concatenated text content from a tool result. */
 export function harnessResultText(result: unknown): string {
   const content = (result as { content?: unknown })?.content;
-  if (!Array.isArray(content)) return '';
+  if (!Array.isArray(content)) return "";
   return content
     .filter(
-      (part): part is { type: 'text'; text: string } =>
+      (part): part is { type: "text"; text: string } =>
         !!part &&
-        typeof part === 'object' &&
-        (part as { type?: unknown }).type === 'text' &&
-        typeof (part as { text?: unknown }).text === 'string',
+        typeof part === "object" &&
+        (part as { type?: unknown }).type === "text" &&
+        typeof (part as { text?: unknown }).text === "string",
     )
     .map((part) => part.text)
-    .join('\n');
+    .join("\n");
 }
 
 /** Returns true when the tool result is flagged as an error. */
@@ -96,6 +96,6 @@ export function spawnServer(
 ): ReturnType<typeof spawn> {
   return spawn(command, args, {
     env: { ...(process.env as Record<string, string>), ...env },
-    stdio: ['pipe', 'pipe', 'pipe'],
+    stdio: ["pipe", "pipe", "pipe"],
   });
 }

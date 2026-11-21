@@ -63,7 +63,10 @@ export function createCorsOptions(): CorsOptions {
             callback(
               null,
               typeof requested === "string"
-                ? requested.split(",").map((header) => header.trim()).filter(Boolean)
+                ? requested
+                    .split(",")
+                    .map((header) => header.trim())
+                    .filter(Boolean)
                 : [],
             );
             return;

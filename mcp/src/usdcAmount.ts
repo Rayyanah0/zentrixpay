@@ -94,8 +94,7 @@ export function isUsdcDecimal(value: unknown): value is string {
  * encoding it is in, so the two can never be swapped by accident.
  */
 export type UsdcBalanceReading =
-  | { source: "horizon"; balance: string }
-  | { source: "soroban"; stroops: bigint };
+  { source: "horizon"; balance: string } | { source: "soroban"; stroops: bigint };
 
 /**
  * Convert any tagged balance reading into one canonical decimal USDC string.

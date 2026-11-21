@@ -1,4 +1,4 @@
-import { Buffer } from 'buffer';
+import { Buffer } from "buffer";
 
 /**
  * Extracts the payer address from an x402 PAYMENT-SIGNATURE header value.
@@ -15,12 +15,12 @@ import { Buffer } from 'buffer';
 export function parsePayerFromXPayment(
   xPaymentHeader: string | undefined | null,
 ): string | undefined {
-  if (!xPaymentHeader || typeof xPaymentHeader !== 'string') {
+  if (!xPaymentHeader || typeof xPaymentHeader !== "string") {
     return undefined;
   }
 
   const decoded = decodeXPayment(xPaymentHeader);
-  if (!decoded || typeof decoded !== 'object') {
+  if (!decoded || typeof decoded !== "object") {
     return undefined;
   }
 
@@ -56,7 +56,7 @@ function decodeXPayment(header: string): unknown {
   // Try base64 first (standard x402 encoding), then raw JSON.
   const candidates: string[] = [];
   try {
-    candidates.push(Buffer.from(trimmed, 'base64').toString('utf8'));
+    candidates.push(Buffer.from(trimmed, "base64").toString("utf8"));
   } catch {
     // ignore
   }
@@ -73,22 +73,22 @@ function decodeXPayment(header: string): unknown {
 }
 
 function isStellarGAddress(value: unknown): value is string {
-  return typeof value === 'string' && /^G[A-Z2-7]{55}$/.test(value);
+  return typeof value === "string" && /^G[A-Z2-7]{55}$/.test(value);
 }
 
 function extractEvmPayer(payload: any): string | undefined {
-  if (!payload || typeof payload !== 'object') {
+  if (!payload || typeof payload !== "object") {
     return undefined;
   }
   const from = payload?.authorization?.from ?? payload?.from;
-  if (typeof from === 'string' && from.length > 0) {
+  if (typeof from === "string" && from.length > 0) {
     return from;
   }
   return undefined;
 }
 
 function extractLegacyStellarPayer(payload: any): string | undefined {
-  if (!payload || typeof payload !== 'object') {
+  if (!payload || typeof payload !== "object") {
     return undefined;
   }
   const candidate = payload?.from ?? payload?.payer;
@@ -112,7 +112,7 @@ function extractLegacyStellarPayer(payload: any): string | undefined {
  * it and walk the credentials to find the address (account) of the signer.
  */
 function extractStellarPayerFromV2(payload: any): string | undefined {
-  if (!payload || typeof payload !== 'object') {
+  if (!payload || typeof payload !== "object") {
     return undefined;
   }
 
@@ -154,7 +154,7 @@ function extractPayerFromAuthEntry(entry: unknown): string | undefined {
   }
 
   // If the entry is already an object with a known address field, use it.
-  if (typeof entry === 'object') {
+  if (typeof entry === "object") {
     const obj = entry as any;
     const direct =
       obj?.address ??
@@ -181,7 +181,7 @@ function extractPayerFromAuthEntry(entry: unknown): string | undefined {
     return undefined;
   }
 
-  if (typeof entry !== 'string') {
+  if (typeof entry !== "string") {
     return undefined;
   }
 
@@ -206,7 +206,7 @@ function extractPayerFromAuthEntry(entry: unknown): string | undefined {
 function scanForGAddressInXdr(encoded: string): string | undefined {
   let buf: Buffer;
   try {
-    buf = Buffer.from(encoded, 'base64');
+    buf = Buffer.from(encoded, "base64");
   } catch {
     return undefined;
   }
@@ -215,7 +215,7 @@ function scanForGAddressInXdr(encoded: string): string | undefined {
   }
 
   // Search for an ASCII G-address (56 chars: 'G' + 55 base32 chars).
-  const ascii = buf.toString('latin1');
+  const ascii = buf.toString("latin1");
   const match = ascii.match(/G[A-Z2-7]{55}/);
   if (match) {
     return match[0];

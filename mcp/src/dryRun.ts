@@ -82,11 +82,7 @@ export interface DryRunBuyResult {
 export interface DryRunOnchainResult {
   mode: "dry-run";
   operation:
-    | "register-onchain"
-    | "update-metadata"
-    | "set-price"
-    | "transfer-ownership"
-    | "set-listed";
+    "register-onchain" | "update-metadata" | "set-price" | "transfer-ownership" | "set-listed";
   resourceId: string;
   validation: {
     resourceId: { valid: boolean; error?: string };

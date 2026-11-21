@@ -58,14 +58,17 @@ export function groupOf(name: string): string {
   )
     return "Wallet";
   if (
-    ["zentrixpay_use_profile", "zentrixpay_list_profiles", "zentrixpay_switch_network_profile"].includes(
-      name,
-    )
+    [
+      "zentrixpay_use_profile",
+      "zentrixpay_list_profiles",
+      "zentrixpay_switch_network_profile",
+    ].includes(name)
   )
     return "Profiles";
   if (["zentrixpay_register"].includes(name)) return "Publishing";
   if (["zentrixpay_tx_status"].includes(name)) return "Diagnostics";
-  if (["zentrixpay_purchase_history", "zentrixpay_export_receipts"].includes(name)) return "Receipts";
+  if (["zentrixpay_purchase_history", "zentrixpay_export_receipts"].includes(name))
+    return "Receipts";
   if (
     [
       "zentrixpay_backup_state",

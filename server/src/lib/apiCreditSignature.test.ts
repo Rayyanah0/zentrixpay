@@ -19,12 +19,15 @@ describe("API credit spend signatures", () => {
       nonce: "nonce-request-0001",
       bodyHash: apiCreditRequestBodyHash(Buffer.from('{"prompt":"hello"}')),
     };
-    const signature = keypair.sign(Buffer.from(buildApiCreditSpendMessage(input))).toString("base64");
+    const signature = keypair
+      .sign(Buffer.from(buildApiCreditSpendMessage(input)))
+      .toString("base64");
     const request = { ...input, signature, nowMs, maxSkewMs: 300_000 };
 
     expect(verifyApiCreditSpendSignature(request)).toEqual({ ok: true });
-    expect(
-      verifyApiCreditSpendSignature({ ...request, path: "/api/api1/other" }),
-    ).toEqual({ ok: false, error: "signature_mismatch" });
+    expect(verifyApiCreditSpendSignature({ ...request, path: "/api/api1/other" })).toEqual({
+      ok: false,
+      error: "signature_mismatch",
+    });
   });
 });

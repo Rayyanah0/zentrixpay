@@ -48,7 +48,15 @@ export function verifyPayeeSignature(params: VerifyPayeeSignatureParams): {
   ok: boolean;
   error?: PayeeSignatureError;
 } {
-  const { currentPayeeAddress, apiId, newWalletAddress, timestampHeader, signatureHeader, nowMs, maxSkewMs } = params;
+  const {
+    currentPayeeAddress,
+    apiId,
+    newWalletAddress,
+    timestampHeader,
+    signatureHeader,
+    nowMs,
+    maxSkewMs,
+  } = params;
 
   // 1. Parse and validate timestamp
   const timestampSeconds = Number(timestampHeader);
