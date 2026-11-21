@@ -149,3 +149,7 @@ Use this to check your implementation. The values are the ones used in `server/s
 - body: `{"id":"evt_1","type":"api.call.charged","data":{"apiId":1}}`
 
 Compute `HMAC-SHA256(secret, "1700000000." + body)`; the hex result is the `v1` value. The Node, Python and Go examples above were checked against this vector.
+
+## Rotating the secret
+
+Owners rotate a signing secret with `POST /apis/:id/webhook/secret/rotate`. The response carries the new secret once. For 24 hours after a rotation, deliveries carry two `v1=` values, one per secret, so either secret verifies. Switch your receiver to the new secret, then call `POST /apis/:id/webhook/secret/expire` to end the grace period early. After it ends, only the new secret signs.
