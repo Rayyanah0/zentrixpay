@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ApiCatalog } from "./components/ApiCatalog.js";
 import { ApiDetailPage } from "./components/ApiDetailPage.js";
 import { ProviderDashboard } from "./components/ProviderDashboard.js";
+import { CallerEntitlements } from "./components/CallerEntitlements.js";
 import { TryItModal } from "./components/TryItModal.js";
 import { ApiDetailModal } from "./components/ApiDetailModal.js";
 import { Toast } from "./components/Toast.js";
@@ -13,7 +14,7 @@ import { useTheme } from "./hooks/useTheme.js";
 import { useWalletConnection } from "./hooks/useWalletConnection.js";
 import type { PublicApi } from "./api/apis.js";
 
-type Tab = "browse" | "provide";
+type Tab = "browse" | "access" | "provide";
 
 function MainLayout() {
   const { t } = useTranslation();
@@ -26,6 +27,7 @@ function MainLayout() {
 
   const TABS: Array<{ id: Tab; label: string }> = [
     { id: "browse", label: t("app.tab_browse") },
+    { id: "access", label: t("app.tab_access") },
     { id: "provide", label: t("app.tab_provide") },
   ];
 
@@ -92,11 +94,9 @@ function MainLayout() {
         </nav>
 
         <main id="main-content">
-          {tab === "browse" ? (
-            <ApiCatalog onTry={setTrying} onView={setViewing} onCopy={copy} />
-          ) : (
-            <ProviderDashboard wallet={wallet} onCopy={copy} />
-          )}
+          {tab === "browse" && <ApiCatalog onTry={setTrying} onView={setViewing} onCopy={copy} />}
+          {tab === "access" && <CallerEntitlements wallet={wallet} />}
+          {tab === "provide" && <ProviderDashboard wallet={wallet} onCopy={copy} />}
         </main>
       </div>
 
