@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, gt, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, ilike, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { apiCalls, apis } from "../db/schema.js";
 import { config, upstreamKeyRing } from "../config.js";
@@ -664,6 +664,62 @@ export async function getPublisherAnalytics(publisherId: string) {
       currency: "USDC" as const,
     },
     apis: perApi,
+  };
+}
+
+export interface PayoutRange {
+  from?: Date;
+  to?: Date;
+}
+
+export interface PayoutRow {
+  payeeWallet: string;
+  apiId: string;
+  apiName: string;
+  chargedCalls: number;
+  revenue: string;
+}
+
+/**
+ * Charged revenue for a publisher, grouped by the payee wallet each API pays
+ * out to and by API. `from` is inclusive and `to` exclusive, matching the
+ * stats windows, so back-to-back periods never double count a call.
+ */
+export async function getPublisherPayouts(publisherId: string, range: PayoutRange = {}) {
+  const conditions = [eq(apis.publisherId, publisherId), eq(apiCalls.charged, true)];
+  if (range.from) conditions.push(gte(apiCalls.createdAt, range.from));
+  if (range.to) conditions.push(lt(apiCalls.createdAt, range.to));
+
+  const rows: PayoutRow[] = await db
+    .select({
+      payeeWallet: apis.walletAddress,
+      apiId: sql<string>`${apis.id}::text`,
+      apiName: apis.name,
+      chargedCalls: sql<number>`count(${apiCalls.id})::int`,
+      revenue: sql<string>`coalesce(sum(${apiCalls.amount}::numeric), 0)::text`,
+    })
+    .from(apiCalls)
+    .innerJoin(apis, eq(apiCalls.apiId, apis.id))
+    .where(and(...conditions))
+    .groupBy(apis.walletAddress, apis.id, apis.name)
+    .orderBy(apis.walletAddress, apis.name);
+
+  // Totals come from SQL numerics so they match the rows exactly (no float drift).
+  const [total] = await db
+    .select({
+      chargedCalls: sql<number>`count(${apiCalls.id})::int`,
+      revenue: sql<string>`coalesce(sum(${apiCalls.amount}::numeric), 0)::text`,
+    })
+    .from(apiCalls)
+    .innerJoin(apis, eq(apiCalls.apiId, apis.id))
+    .where(and(...conditions));
+
+  return {
+    from: range.from?.toISOString() ?? null,
+    to: range.to?.toISOString() ?? null,
+    currency: "USDC" as const,
+    totals: { chargedCalls: total?.chargedCalls ?? 0, revenue: total?.revenue ?? "0" },
+    rows,
   };
 }
 
