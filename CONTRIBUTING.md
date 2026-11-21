@@ -41,12 +41,12 @@ Thanks for your interest in contributing to ZentrixPay! This guide will walk you
 
 ZentrixPay is a pnpm workspace (monorepo). The top-level directories are:
 
-| Path | Description |
-| --- | --- |
-| `server/` | Backend API and business logic. |
-| `web/` | Frontend web application. |
-| `mcp/` | Model Context Protocol (MCP) server and integrations. |
-| `contract/` | Smart contracts and related tooling. |
+| Path        | Description                                                       |
+| ----------- | ----------------------------------------------------------------- |
+| `server/`   | Backend API and business logic.                                   |
+| `web/`      | Frontend web application.                                         |
+| `mcp/`      | Model Context Protocol (MCP) server and integrations.             |
+| `contract/` | Smart contracts and related tooling.                              |
 | `packages/` | Shared libraries and internal packages used across the workspace. |
 
 Each directory is its own package with its own `package.json`, scripts, and tests. Use pnpm's workspace filters to target a specific package.
@@ -133,5 +133,32 @@ Before opening a pull request, make sure the tests for every package you touched
 5. **Fill out the PR description** — summarize the change, link the issue it closes (e.g. `Closes #123`), and note anything reviewers should pay attention to.
 
 6. **Respond to review feedback.** A maintainer will review your PR; please address comments and push follow-up commits as needed.
+
+## Resolving merge conflicts
+
+Several "Merge branch 'main' into …" commits have silently dropped or duplicated
+code while resolving conflicts. When you merge or rebase `main` into your branch:
+
+1. **Resolve each conflict deliberately.** Keep both sides' intent; don't just
+   pick "ours" or "theirs" for a whole file. Watch for duplicated functions,
+   imports and `try` blocks where both versions were kept.
+2. **Review the merge diff**, not just your own changes:
+
+   ```bash
+   git diff main...HEAD      # everything your PR changes relative to main
+   git show --remerge-diff HEAD   # what the merge commit itself changed
+   ```
+
+   Anything in there you didn't mean to touch is a sign code was lost.
+
+3. **Re-run typecheck and tests after the merge**, even if they passed before:
+
+   ```bash
+   pnpm --filter server typecheck
+   pnpm -r test
+   ```
+
+4. **Tick the conflict checklist item** in the PR template, and mention in the
+   PR description which files had conflicts so reviewers can look at them.
 
 Thanks again for contributing to ZentrixPay!
