@@ -1,7 +1,7 @@
 import { config } from "../config.js";
 import { db, pgClient } from "../db/client.js";
 import { runWithAdvisoryLock, WORKER_LOCK_KEYS } from "../lib/workerLock.js";
-import { getLogger } from "../lib/logger.js";
+import { logger } from "../lib/logger.js";
 import { purgeExpiredApiCalls } from "../services/apiCallRetention.js";
 
 // Deletes api_calls rows older than API_CALL_RETENTION_DAYS (#144) on an
@@ -13,7 +13,7 @@ let running = false;
 
 export function startApiCallRetentionWorker(): void {
   if (config.API_CALL_RETENTION_DAYS <= 0 || config.API_CALL_RETENTION_INTERVAL_MS <= 0) return;
-  getLogger().info(
+  logger.info(
     {
       event: "api_call_retention_worker_start",
       retentionDays: config.API_CALL_RETENTION_DAYS,
@@ -47,7 +47,7 @@ export async function runApiCallRetention(): Promise<void> {
         batchSize: config.API_CALL_RETENTION_BATCH_SIZE,
       });
       if (deleted > 0) {
-        getLogger().info(
+        logger.info(
           {
             event: "api_calls_purged",
             deleted,
@@ -58,7 +58,7 @@ export async function runApiCallRetention(): Promise<void> {
       }
     });
   } catch (err) {
-    getLogger().error({ event: "api_call_retention_error", err }, "API call retention run failed");
+    logger.error({ event: "api_call_retention_error", err }, "API call retention run failed");
   } finally {
     running = false;
   }

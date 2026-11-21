@@ -13,6 +13,10 @@ import { pgClient } from "./db/client.js";
 import { startPoolMetrics, stopPoolMetrics } from "./db/client.js";
 import { startHealthCheckWorker, stopHealthCheckWorker } from "./workers/healthCheckWorker.js";
 import {
+  startWebhookDeliveryWorker,
+  stopWebhookDeliveryWorker,
+} from "./workers/webhookDeliveryWorker.js";
+import {
   startApiCallRetentionWorker,
   stopApiCallRetentionWorker,
 } from "./workers/apiCallRetentionWorker.js";
@@ -41,6 +45,7 @@ const server: Server = app.listen(config.PORT, () => {
     startHealthCheckWorker();
     startApiCallRetentionWorker();
     startApiCallRecoveryWorker();
+    startWebhookDeliveryWorker();
   } else {
     rootLogger.info(
       { event: "background_workers_disabled" },
@@ -59,6 +64,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   stopHealthCheckWorker();
   stopApiCallRetentionWorker();
   stopApiCallRecoveryWorker();
+  stopWebhookDeliveryWorker();
   stopPoolMetrics();
 
   // Stop passing readiness checks so load balancers drain us before we close.

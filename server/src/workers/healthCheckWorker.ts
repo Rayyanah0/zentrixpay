@@ -1,7 +1,7 @@
 import { config, upstreamKeyRing } from "../config.js";
 import { pgClient } from "../db/client.js";
 import { runWithAdvisoryLock, WORKER_LOCK_KEYS } from "../lib/workerLock.js";
-import { getLogger } from "../lib/logger.js";
+import { logger } from "../lib/logger.js";
 import { sendUpstream } from "../lib/upstreamClient.js";
 import { decryptSecret } from "../utils/secretBox.js";
 import {
@@ -27,7 +27,7 @@ let running = false;
 
 export function startHealthCheckWorker(): void {
   if (config.HEALTH_CHECK_INTERVAL_MS <= 0) return;
-  getLogger().info(
+  logger.info(
     { event: "health_worker_start", intervalMs: config.HEALTH_CHECK_INTERVAL_MS },
     "starting upstream health-check worker",
   );
@@ -72,7 +72,7 @@ async function checkOne(api: ApiRow): Promise<void> {
   const ok = await checkApiHealth(api);
   const updated = await recordHealthCheck(api, ok, config.HEALTH_CHECK_FAILURE_THRESHOLD);
   if (updated.healthy !== api.healthy) {
-    getLogger().warn(
+    logger.warn(
       {
         event: updated.healthy ? "api_upstream_recovered" : "api_upstream_unhealthy",
         apiId: api.id,
@@ -90,7 +90,7 @@ async function tick(): Promise<void> {
   try {
     await runWithAdvisoryLock(pgClient, WORKER_LOCK_KEYS.healthCheck, runHealthChecks);
   } catch (err) {
-    getLogger().error({ event: "health_worker_tick_error", err }, "health worker tick failed");
+    logger.error({ event: "health_worker_tick_error", err }, "health worker tick failed");
   } finally {
     running = false;
   }
@@ -102,7 +102,7 @@ async function runHealthChecks(): Promise<void> {
     const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
       for (let api = queue.shift(); api; api = queue.shift()) {
         await checkOne(api).catch((err) =>
-          getLogger().error(
+          logger.error(
             { event: "health_check_error", apiId: api!.id, err },
             "health check failed to run",
           ),
@@ -111,6 +111,6 @@ async function runHealthChecks(): Promise<void> {
     });
     await Promise.all(workers);
   } catch (err) {
-    getLogger().error({ event: "health_worker_tick_error", err }, "health worker tick failed");
+    logger.error({ event: "health_worker_tick_error", err }, "health worker tick failed");
   }
 }
