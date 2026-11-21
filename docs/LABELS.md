@@ -16,12 +16,12 @@ Actions tab with **prune** enabled.
 Every triaged issue gets one label from each of the first three families, plus
 an optional wave:
 
-| Family         | How many        | Purpose                                   |
-| -------------- | --------------- | ----------------------------------------- |
-| `area:`        | exactly one     | Which part of the codebase                |
-| `type:`        | exactly one     | What kind of change                       |
-| `difficulty:`  | exactly one     | Expected effort / experience needed       |
-| `wave:`        | zero or one     | Which contributor cohort it belongs to    |
+| Family        | How many    | Purpose                                |
+| ------------- | ----------- | -------------------------------------- |
+| `area:`       | exactly one | Which part of the codebase             |
+| `type:`       | exactly one | What kind of change                    |
+| `difficulty:` | exactly one | Expected effort / experience needed    |
+| `wave:`       | zero or one | Which contributor cohort it belongs to |
 
 ### Area
 
@@ -73,6 +73,21 @@ triaged, and tracked together.
 Add the next number (`wave: 4`, …) to `.github/labels.yml` when a new cohort
 starts.
 
+## Other labels
+
+These sit outside the four families but are in `.github/labels.yml`, so a
+prune run keeps them:
+
+- `priority: critical` — blocks the product or main; fix first
+- `priority: high` — important; fix soon after critical
+- `accessibility` — barrier affecting people with disabilities
+- `Stellar Wave` — issues in the Stellar wave program
+- `security: flagged` / `security: reviewed` — set on PRs by the malware scan
+  and by the maintainer who reviews what it flagged
+
+Any label in use on the repo must be listed in `labels.yml`; a prune run
+deletes everything else.
+
 ## Triage checklist
 
 When a new issue comes in:
@@ -84,6 +99,7 @@ When a new issue comes in:
 4. Optionally add `wave:` once the issue is slated for a cohort, otherwise
    `wave: backlog`.
 5. Add `help wanted` if you'd welcome an external contributor picking it up.
+6. Add `priority: critical` or `priority: high` only if it must jump the queue.
 
 ## Workflow / status labels (kept)
 
@@ -100,12 +116,12 @@ The following stock GitHub labels were **ambiguous or duplicated** by the new
 taxonomy and should be removed (run **Sync labels** with prune enabled, which
 drops any label not in `labels.yml`):
 
-| Old default     | Replaced by                                   |
-| --------------- | --------------------------------------------- |
-| `bug`           | `type: bug`                                   |
-| `enhancement`   | `type: feature`                               |
-| `documentation` | `type: docs` (+ `area: docs`)                 |
-| `invalid`       | `wontfix` or close as not-planned             |
+| Old default     | Replaced by                       |
+| --------------- | --------------------------------- |
+| `bug`           | `type: bug`                       |
+| `enhancement`   | `type: feature`                   |
+| `documentation` | `type: docs` (+ `area: docs`)     |
+| `invalid`       | `wontfix` or close as not-planned |
 
 Issue templates still apply the stock labels (`bug`, `enhancement`,
 `documentation`) on creation; a triager swaps them for the prefixed `type:`
