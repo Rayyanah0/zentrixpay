@@ -7,6 +7,7 @@ import type {
 } from "@x402/core/types";
 import { getLogger } from "./logger.js";
 import { gatewaySettlementFailures } from "./metrics.js";
+import { withSpan } from "./spans.js";
 
 function summarizeVerify(result: VerifyResponse): Record<string, unknown> {
   const r = result as VerifyResponse & {
@@ -55,7 +56,9 @@ export function createLoggingFacilitatorClient(url: string): HTTPFacilitatorClie
       const network = paymentRequirements.network;
       log.info({ event: "x402_verify", phase: "start", network }, "x402 verify");
       try {
-        const result = await inner.verify(paymentPayload, paymentRequirements);
+        const result = await withSpan("x402.facilitator.verify", { "x402.network": network }, () =>
+          inner.verify(paymentPayload, paymentRequirements),
+        );
         log.info(
           { event: "x402_verify", phase: "complete", network, ...summarizeVerify(result) },
           "x402 verify",
@@ -74,7 +77,9 @@ export function createLoggingFacilitatorClient(url: string): HTTPFacilitatorClie
       const network = paymentRequirements.network;
       log.info({ event: "x402_settle", phase: "start", network }, "x402 settle");
       try {
-        const result = await inner.settle(paymentPayload, paymentRequirements);
+        const result = await withSpan("x402.facilitator.settle", { "x402.network": network }, () =>
+          inner.settle(paymentPayload, paymentRequirements),
+        );
         log.info(
           { event: "x402_settle", phase: "complete", network, ...summarizeSettle(result) },
           "x402 settle",

@@ -70,6 +70,7 @@ import { deliverChargedCallWebhook } from "../services/webhookService.js";
 import { decryptSecret } from "../utils/secretBox.js";
 import { stroopsToUsdc, usdcToStroops } from "../utils/usdc.js";
 import { getLogger } from "../lib/logger.js";
+import { withSpan } from "../lib/spans.js";
 import {
   gatewayChargedCalls,
   gatewayCreditSpends,
@@ -601,7 +602,9 @@ async function proxyHandler(req: Request, res: Response) {
   let upstream;
   const upstreamStarted = performance.now();
   try {
-    upstream = await sendUpstream(upstreamOpts);
+    upstream = await withSpan("upstream.call", { "zentrixpay.api.id": api.id }, () =>
+      sendUpstream(upstreamOpts),
+    );
     gatewayUpstreamDuration.observe((performance.now() - upstreamStarted) / 1000);
   } catch (err) {
     gatewayUpstreamDuration.observe((performance.now() - upstreamStarted) / 1000);
