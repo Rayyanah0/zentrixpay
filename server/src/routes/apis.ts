@@ -10,6 +10,7 @@ import multer from "multer";
 import { apiKeyAuth } from "../middleware/apiKeyAuth.js";
 import { requestSignatureAuth } from "../middleware/requestSignatureAuth.js";
 import { payeeSignatureAuth } from "../middleware/payeeSignatureAuth.js";
+import { walletSignatureAuth } from "../middleware/walletSignatureAuth.js";
 import { validate } from "../middleware/validate.js";
 import { publishIpRateLimit, publishWalletRateLimit } from "../middleware/rateLimiters.js";
 import { apiPaywall, checkPayerAccess, loadProxiedApi } from "../middleware/apiPaywall.js";
@@ -48,6 +49,7 @@ import {
   type ApiRow,
 } from "../services/apiService.js";
 import { getApiCreditBalance, purchaseApiCredits } from "../services/apiCredits.js";
+import { listPayerEntitlements } from "../services/payerEntitlements.js";
 import { statsPagination } from "../services/apiStatsQuery.js";
 import { apiCreditPurchaseReference } from "../lib/apiCreditSignature.js";
 import { deliverChargedCallWebhook } from "../services/webhookService.js";
@@ -290,13 +292,11 @@ router.get("/apis/:id/stats/time-series", apiKeyAuth, async (req, res) => {
   }
 });
 
-// GET /payers/:address/calls — receipts for the calls a wallet paid for (paged)
-router.get("/payers/:address/calls", async (req, res) => {
+// GET /payers/:address/calls — receipts for the calls a wallet paid for (paged).
+// Signed by that wallet (X-Wallet-Timestamp + X-Wallet-Signature): call
+// history is private to the payer.
+router.get("/payers/:address/calls", walletSignatureAuth, async (req, res) => {
   const address = req.params.address as string;
-  if (!/^G[A-Z2-7]{55}$/.test(address)) {
-    res.status(400).json({ error: "address must be a Stellar public key (G...)" });
-    return;
-  }
   const query = payerCallsQuerySchema.safeParse(req.query);
   if (!query.success) {
     res.status(400).json({ error: query.error.format() });
@@ -311,6 +311,14 @@ router.get("/payers/:address/calls", async (req, res) => {
     offset,
     nextOffset: hasMore ? offset + limit : null,
   });
+});
+
+// GET /payers/:address/entitlements — the wallet's active passes (API, expiry)
+// and prepaid credit balances per API. Signed by that wallet (#292).
+router.get("/payers/:address/entitlements", walletSignatureAuth, async (req, res) => {
+  const entitlements = await listPayerEntitlements(req.params.address as string);
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json(entitlements);
 });
 
 // ── Paid proxy ────────────────────────────────────────────────────────────────
@@ -404,31 +412,6 @@ export async function finishHandler(req: Request, res: Response) {
     console.error("Failed to record api call", err);
   }
 }
-
-/**
- * GET /apis/:id/stats
- * Returns aggregate stats plus recent calls including settlement_tx.
- */
-router.get("/:id/stats", async (req: Request, res: Response) => {
-  const apiId = req.params.id;
-  const sinceParam = req.query.since as string | undefined;
-  const since = sinceParam ? new Date(sinceParam) : undefined;
-
-  try {
-    const [api] = await db.select().from(apis).where(eq(apis.id, apiId)).limit(1);
-    if (!api) {
-      return res.status(404).json({ error: "API not found" });
-    }
-    const [totals, recentCalls] = await Promise.all([
-      getApiStats(api.id, { since }),
-      listRecentCalls(api.id, 50),
-    ]);
-    return res.json({ apiId: api.id, ...totals, recentCalls });
-  } catch (err) {
-    console.error("Failed to fetch API stats", err);
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
 
 const UPSTREAM_ERROR_STATUS = { blocked: 502, network: 502, too_large: 502, timeout: 504 } as const;
 

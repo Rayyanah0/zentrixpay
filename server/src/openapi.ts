@@ -33,6 +33,19 @@ const headerRef = (name: string) => ref("headers", name);
 
 const json = (schema: Json) => ({ "application/json": { schema } });
 
+const walletTimestampHeader = {
+  name: "X-Wallet-Timestamp",
+  in: "header",
+  required: true,
+  description: "Unix timestamp (seconds) included in the signed wallet-auth message.",
+  schema: { type: "string", pattern: "^\\d+$" },
+};
+
+const walletSignatureRefused = {
+  description: "Missing, stale or invalid wallet signature.",
+  content: json(ref("schemas", "Error")),
+};
+
 const usdcAmount = {
   type: "string",
   pattern: "^\\d+(\\.\\d{1,7})?$",
@@ -150,6 +163,16 @@ export const openApiSpec: OpenApiDocument = {
         in: "header",
         name: "x-api-key",
         description: "Publisher API key, shown once by POST /publishers.",
+      },
+      WalletSignature: {
+        type: "apiKey",
+        in: "header",
+        name: "X-Wallet-Signature",
+        description:
+          "Base64 Ed25519 signature, by the wallet in the path, of the UTF-8 message " +
+          '"zentrixpay:wallet-auth\\n<METHOD>\\n<path>\\n<address>\\n<timestamp>". Send the same unix ' +
+          "timestamp (seconds) in X-Wallet-Timestamp. Raw and SEP-53 (Freighter) signatures " +
+          "are accepted.",
       },
       X402Payment: {
         type: "apiKey",
@@ -566,6 +589,42 @@ export const openApiSpec: OpenApiDocument = {
           },
         },
       },
+      PayerEntitlements: {
+        type: "object",
+        required: ["payer", "passes", "credits"],
+        properties: {
+          payer: stellarAddress,
+          passes: {
+            type: "array",
+            description: "Passes active now, soonest expiry first.",
+            items: {
+              type: "object",
+              required: ["passId", "apiId", "apiName", "activeFrom", "expiresAt"],
+              properties: {
+                passId: { type: "string" },
+                apiId: { type: "string" },
+                apiName: { type: "string" },
+                activeFrom: { type: "string", format: "date-time" },
+                expiresAt: { type: "string", format: "date-time" },
+              },
+            },
+          },
+          credits: {
+            type: "array",
+            description: "Non-zero prepaid call credit balances, per API.",
+            items: {
+              type: "object",
+              required: ["apiId", "apiName", "balance", "updatedAt"],
+              properties: {
+                apiId: { type: "string" },
+                apiName: { type: "string" },
+                balance: { type: "integer", minimum: 1 },
+                updatedAt: { type: "string", format: "date-time" },
+              },
+            },
+          },
+        },
+      },
       AccessPass: {
         type: "object",
         required: ["passId", "expiresAt", "message"],
@@ -957,10 +1016,38 @@ export const openApiSpec: OpenApiDocument = {
         tags: ["Statistics"],
         summary: "Receipts for calls a wallet paid for",
         operationId: "listPayerCalls",
-        parameters: [paramRef("Limit"), paramRef("Offset")],
+        security: [{ WalletSignature: [] }],
+        parameters: [walletTimestampHeader, paramRef("Limit"), paramRef("Offset")],
         responses: {
           "200": { description: "One page of calls.", content: json(schemaRef("PayerCalls")) },
           "400": responseRef("BadRequest"),
+          "401": walletSignatureRefused,
+        },
+      },
+    },
+    "/payers/{address}/entitlements": {
+      parameters: [
+        {
+          name: "address",
+          in: "path",
+          required: true,
+          description: "Payer wallet.",
+          schema: stellarAddress,
+        },
+      ],
+      get: {
+        tags: ["Statistics"],
+        summary: "Active access passes and prepaid credit balances held by a wallet",
+        operationId: "getPayerEntitlements",
+        security: [{ WalletSignature: [] }],
+        parameters: [walletTimestampHeader],
+        responses: {
+          "200": {
+            description: "What the wallet holds right now.",
+            content: json(schemaRef("PayerEntitlements")),
+          },
+          "400": responseRef("BadRequest"),
+          "401": walletSignatureRefused,
         },
       },
     },
