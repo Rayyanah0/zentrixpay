@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { config, upstreamKeyRing } from "../config.js";
 import { getLogger } from "../lib/logger.js";
 import { sendUpstream } from "../lib/upstreamClient.js";
@@ -39,6 +39,48 @@ export function signWebhookPayload(secret: string, timestamp: number, body: stri
 
 export function webhookSignatureHeader(secret: string, timestamp: number, body: string): string {
   return `t=${timestamp},v1=${signWebhookPayload(secret, timestamp, body)}`;
+}
+
+/** Default replay window for receivers: a signed timestamp older than this is rejected. */
+export const WEBHOOK_TOLERANCE_SECONDS = 300;
+
+export type WebhookVerifyResult =
+  | { ok: true }
+  | { ok: false; reason: "missing_header" | "malformed" | "stale" | "mismatch" };
+
+/**
+ * Receiver-side check of an `X-ZentrixPay-Signature` header. Recomputes v1 over
+ * `${t}.${body}`, compares in constant time, and rejects timestamps outside
+ * the tolerance window (in either direction) to stop replays. Accepts several
+ * v1 values so a receiver still verifies during secret rotation.
+ */
+export function verifyWebhookSignature(
+  secret: string,
+  header: string | undefined,
+  body: string,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+  toleranceSeconds: number = WEBHOOK_TOLERANCE_SECONDS,
+): WebhookVerifyResult {
+  if (!header) return { ok: false, reason: "missing_header" };
+  let timestamp: number | undefined;
+  const signatures: string[] = [];
+  for (const part of header.split(",")) {
+    const [key, value] = part.trim().split("=", 2);
+    if (key === "t" && /^\d+$/.test(value ?? "")) timestamp = Number(value);
+    else if (key === "v1" && /^[0-9a-f]+$/.test(value ?? "")) signatures.push(value);
+  }
+  if (timestamp === undefined || signatures.length === 0) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (Math.abs(nowSeconds - timestamp) > toleranceSeconds) {
+    return { ok: false, reason: "stale" };
+  }
+  const expected = Buffer.from(signWebhookPayload(secret, timestamp, body), "hex");
+  const matched = signatures.some((hex) => {
+    const given = Buffer.from(hex, "hex");
+    return given.length === expected.length && timingSafeEqual(given, expected);
+  });
+  return matched ? { ok: true } : { ok: false, reason: "mismatch" };
 }
 
 /** Delay before retry `attempt` (1-based count of failed attempts so far). */
