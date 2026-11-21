@@ -10,6 +10,26 @@ export function apiCreditRequestBodyHash(body: Buffer | undefined): string {
   return body ? hashRequestBody(body) : EMPTY_BODY_HASH;
 }
 
+/**
+ * Prefix used by SEP-53 ("Stellar Signed Message"). Browser wallets such as
+ * Freighter's signMessage sign sha256(prefix + message) rather than the raw
+ * message, so both forms are accepted for the same message text.
+ */
+export const SEP53_MESSAGE_PREFIX = "Stellar Signed Message:\n";
+
+/** SEP-53 digest of a message: sha256("Stellar Signed Message:\n" + message). */
+export function sep53MessageDigest(message: Buffer): Buffer {
+  return createHash("sha256")
+    .update(Buffer.from(SEP53_MESSAGE_PREFIX, "utf8"))
+    .update(message)
+    .digest();
+}
+
+/**
+ * The signed credit-spend message. Clients sign this exact text, either raw
+ * (ed25519 over the bytes) or per SEP-53 (ed25519 over sha256 of the prefixed
+ * bytes, as wallets do). Fields are joined with "\n" in this order.
+ */
 export function buildApiCreditSpendMessage(input: {
   walletAddress: string;
   apiId: string;
@@ -77,11 +97,12 @@ export function verifyApiCreditSpendSignature(input: {
     return { ok: false, error: "invalid_signature" };
   }
 
-  const message = buildApiCreditSpendMessage(input);
+  const messageBytes = Buffer.from(buildApiCreditSpendMessage(input), "utf8");
   try {
-    return keypair.verify(Buffer.from(message, "utf8"), signature)
-      ? { ok: true }
-      : { ok: false, error: "signature_mismatch" };
+    const valid =
+      keypair.verify(messageBytes, signature) ||
+      keypair.verify(sep53MessageDigest(messageBytes), signature);
+    return valid ? { ok: true } : { ok: false, error: "signature_mismatch" };
   } catch {
     return { ok: false, error: "signature_mismatch" };
   }
