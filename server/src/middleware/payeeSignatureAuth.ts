@@ -21,6 +21,8 @@ import type { ApiRow } from "../services/apiService.js";
  * holder from silently redirecting revenue.
  *
  * The api row must be attached to res.locals.api before this middleware runs.
+ * If it is missing, the request is rejected (fail closed) rather than skipping
+ * the payee-signature check.
  */
 export function payeeSignatureAuth(req: Request, res: Response, next: NextFunction): void {
   const body = req.body as Record<string, unknown>;
@@ -32,8 +34,14 @@ export function payeeSignatureAuth(req: Request, res: Response, next: NextFuncti
     return;
   }
 
+  // Fail closed: a walletAddress change requires the api row to verify against.
+  if (!api) {
+    res.status(500).json({ error: "API context not loaded" });
+    return;
+  }
+
   // If the address hasn't changed, no signature needed
-  if (!api || body.walletAddress === api.walletAddress) {
+  if (body.walletAddress === api.walletAddress) {
     next();
     return;
   }
