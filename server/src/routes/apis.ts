@@ -58,7 +58,7 @@ import {
   prepareApiRegistration,
 } from "../services/apiOnchain.js";
 import { confirmCallRefund, prepareCallRefund } from "../services/apiRefunds.js";
-import { sendUpstream, streamUpstream, UpstreamError } from "../lib/upstreamClient.js";
+import { sendUpstream, streamUpstream, UPSTREAM_ERROR_CODES, UpstreamError } from "../lib/upstreamClient.js";
 import { filterRequestHeaders, filterResponseHeaders } from "../lib/proxyHeaders.js";
 import { paymentHeader, paymentHeaderHash, payerFromPayment } from "../lib/payer.js";
 import {
@@ -466,7 +466,7 @@ async function proxyHandler(req: Request, res: Response) {
   const segments = (req.params.path as unknown as string[] | undefined) ?? [];
   const target = buildUpstreamUrl(api.upstreamUrl, segments, req.originalUrl);
   if (!target) {
-    res.status(400).json({ error: "Invalid path" });
+    res.status(400).json({ error: "Invalid path", code: "invalid_path" });
     return;
   }
 
@@ -536,7 +536,7 @@ async function proxyHandler(req: Request, res: Response) {
         );
         res
           .status(UPSTREAM_ERROR_STATUS[err.kind])
-          .json({ error: "upstream_failed", reason: err.kind });
+          .json({ error: "upstream_failed", reason: err.kind, code: UPSTREAM_ERROR_CODES[err.kind] });
         return;
       }
       throw err;
@@ -586,7 +586,7 @@ async function proxyHandler(req: Request, res: Response) {
       );
       res
         .status(UPSTREAM_ERROR_STATUS[err.kind])
-        .json({ error: "upstream_failed", reason: err.kind });
+        .json({ error: "upstream_failed", reason: err.kind, code: UPSTREAM_ERROR_CODES[err.kind] });
       return;
     }
     throw err;
