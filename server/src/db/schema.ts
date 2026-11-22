@@ -268,3 +268,6 @@ export const proxyIdempotency = pgTable(
 );
 
 export type ApiPassRow = typeof apiPasses.$inferSelect;
+
+/** Row type for the `apis` table, shared across middleware and services. */
+export type ApiRow = typeof apis.$inferSelect;

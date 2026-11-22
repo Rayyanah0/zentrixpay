@@ -4,6 +4,9 @@ node_modules/
 # pnpm content-addressable store (local cache, never committed)
 .pnpm-store/
 
+# npm lock file (this is a pnpm workspace; package-lock.json is not used)
+package-lock.json
+
 # Builds
 dist/
 target/
