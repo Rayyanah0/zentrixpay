@@ -8,12 +8,18 @@ import express, {
 } from "express";
 import multer from "multer";
 import { apiKeyAuth } from "../middleware/apiKeyAuth.js";
+import { writeCallsCsv } from "../services/apiCallsExport.js";
 import { requestSignatureAuth } from "../middleware/requestSignatureAuth.js";
 import { payeeSignatureAuth } from "../middleware/payeeSignatureAuth.js";
 import { validate } from "../middleware/validate.js";
 import { publishIpRateLimit, publishWalletRateLimit } from "../middleware/rateLimiters.js";
 import { ownershipVerifyRateLimit } from "../middleware/ownershipVerifyRateLimit.js";
-import { apiPaywall, checkPayerAccess, loadProxiedApi } from "../middleware/apiPaywall.js";
+import {
+  apiPaywall,
+  checkPayerAccess,
+  checkPayerAllowDeny,
+  loadProxiedApi,
+} from "../middleware/apiPaywall.js";
 import { createIpRateLimiter } from "../middleware/rateLimit.js";
 import { getRateLimitStore } from "../lib/rateLimit/index.js";
 import {
@@ -51,7 +57,6 @@ import {
 import { getApiCreditBalance, purchaseApiCredits } from "../services/apiCredits.js";
 import { statsPagination } from "../services/apiStatsQuery.js";
 import { apiCreditPurchaseReference } from "../lib/apiCreditSignature.js";
-import { deliverChargedCallWebhook } from "../services/webhookService.js";
 import {
   confirmApiPrice,
   confirmApiRegistration,
@@ -59,7 +64,7 @@ import {
   prepareApiRegistration,
 } from "../services/apiOnchain.js";
 import { confirmCallRefund, prepareCallRefund } from "../services/apiRefunds.js";
-import { sendUpstream, streamUpstream, UpstreamError } from "../lib/upstreamClient.js";
+import { sendUpstream, streamUpstream, UPSTREAM_ERROR_CODES, UpstreamError } from "../lib/upstreamClient.js";
 import { filterRequestHeaders, filterResponseHeaders } from "../lib/proxyHeaders.js";
 import { paymentHeader, paymentHeaderHash, payerFromPayment } from "../lib/payer.js";
 import {
@@ -67,10 +72,17 @@ import {
   type ProxyIdempotencyKey,
   type StoredProxyResponse,
 } from "../lib/idempotency.js";
-import { deliverChargedCallWebhook } from "../services/webhookService.js";
+import { chargedCallWebhookEntry } from "../services/webhookService.js";
 import { decryptSecret } from "../utils/secretBox.js";
 import { stroopsToUsdc, usdcToStroops } from "../utils/usdc.js";
 import { getLogger } from "../lib/logger.js";
+import { withSpan } from "../lib/spans.js";
+import {
+  gatewayChargedCalls,
+  gatewayCreditSpends,
+  gatewayProxiedCalls,
+  gatewayUpstreamDuration,
+} from "../lib/metrics.js";
 import { config, upstreamKeyRing } from "../config.js";
 import { ProxyBufferSemaphore, proxyBufferConcurrency } from "../middleware/proxyBuffer.js";
 import { importBulkOpenApi, previewBulkOpenApi } from "../services/openApiImport.js";
@@ -299,6 +311,33 @@ router.get("/apis/:id/stats", apiKeyAuth, async (req, res) => {
   }
 });
 
+// GET /apis/:id/calls.csv?from&to — streamed CSV of the call history (owner only)
+router.get("/apis/:id/calls.csv", apiKeyAuth, async (req, res) => {
+  const query = apiStatsQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    res.status(400).json({ error: query.error.format() });
+    return;
+  }
+  let api;
+  try {
+    api = await getOwnedApi(req.params.id as string, req.publisher!.id, { includeArchived: true });
+  } catch (err) {
+    sendServiceError(res, err);
+    return;
+  }
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="api-${api.id}-calls.csv"`);
+  res.setHeader("Cache-Control", "no-store");
+  res.flushHeaders();
+  try {
+    await writeCallsCsv(res, api.id, { from: query.data.from, to: query.data.to });
+    res.end();
+  } catch (err) {
+    getLogger().error({ event: "api_calls_export_failed", apiId: api.id, err }, "CSV export failed");
+    res.destroy(err instanceof Error ? err : undefined);
+  }
+});
+
 // GET /apis/:id/stats/time-series?days=7|30|90 — per-day calls and revenue (owner)
 router.get("/apis/:id/stats/time-series", apiKeyAuth, async (req, res) => {
   try {
@@ -488,7 +527,7 @@ async function proxyHandler(req: Request, res: Response) {
   const segments = (req.params.path as unknown as string[] | undefined) ?? [];
   const target = buildUpstreamUrl(api.upstreamUrl, segments, req.originalUrl);
   if (!target) {
-    res.status(400).json({ error: "Invalid path" });
+    res.status(400).json({ error: "Invalid path", code: "invalid_path" });
     return;
   }
 
@@ -503,20 +542,40 @@ async function proxyHandler(req: Request, res: Response) {
   res.on("finish", () => {
     const settlement = settlementFrom(res);
     const charged = res.statusCode < 400;
+    gatewayProxiedCalls.inc({ status_class: `${Math.floor(res.statusCode / 100)}xx` });
+    gatewayChargedCalls.inc({ charged: String(charged) });
+    if (charged && res.locals.creditPayer) gatewayCreditSpends.inc();
     const callId = randomUUID();
+    const payerAddress =
+      (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement);
+    const amount = (res.locals.apiCallPrice as string | undefined) ?? api.price;
+    // Stored minimized: identifiers and the query string are dropped (#144).
+    const path = minimizeCallPath(
+      target.pathname.slice(new URL(api.upstreamUrl).pathname.replace(/\/+$/, "").length) || "/",
+    );
+    const durationMs = Date.now() - started;
     recordApiCall({
       callId,
       apiId: api.id,
       charged,
-      payerAddress: (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement),
-      amount: (res.locals.apiCallPrice as string | undefined) ?? api.price,
+      payerAddress,
+      amount,
       method: req.method,
-      // Stored minimized: identifiers and the query string are dropped (#144).
-      path: minimizeCallPath(
-        target.pathname.slice(new URL(api.upstreamUrl).pathname.replace(/\/+$/, "").length) || "/",
-      ),
+      path,
       responseStatus: res.statusCode,
-      durationMs: Date.now() - started,
+      durationMs,
+      // Charged-call webhook goes to the outbox in the same transaction (#208).
+      webhook: charged
+        ? chargedCallWebhookEntry(api, {
+            callId,
+            payerAddress,
+            amount,
+            method: req.method,
+            path,
+            responseStatus: res.statusCode,
+            durationMs,
+          })
+        : undefined,
     }).catch((err) =>
       // Only reached when the recovery spool itself could not be written (#134).
       getLogger().error(
@@ -558,7 +617,7 @@ async function proxyHandler(req: Request, res: Response) {
         );
         res
           .status(UPSTREAM_ERROR_STATUS[err.kind])
-          .json({ error: "upstream_failed", reason: err.kind });
+          .json({ error: "upstream_failed", reason: err.kind, code: UPSTREAM_ERROR_CODES[err.kind] });
         return;
       }
       throw err;
@@ -598,9 +657,14 @@ async function proxyHandler(req: Request, res: Response) {
 
   // ── Buffered path (default) ─────────────────────────────────────────────────
   let upstream;
+  const upstreamStarted = performance.now();
   try {
-    upstream = await sendUpstream(upstreamOpts);
+    upstream = await withSpan("upstream.call", { "zentrixpay.api.id": api.id }, () =>
+      sendUpstream(upstreamOpts),
+    );
+    gatewayUpstreamDuration.observe((performance.now() - upstreamStarted) / 1000);
   } catch (err) {
+    gatewayUpstreamDuration.observe((performance.now() - upstreamStarted) / 1000);
     if (err instanceof UpstreamError) {
       getLogger().warn(
         { event: "api_upstream_failed", apiId: api.id, kind: err.kind, error: err.message },
@@ -608,7 +672,7 @@ async function proxyHandler(req: Request, res: Response) {
       );
       res
         .status(UPSTREAM_ERROR_STATUS[err.kind])
-        .json({ error: "upstream_failed", reason: err.kind });
+        .json({ error: "upstream_failed", reason: err.kind, code: UPSTREAM_ERROR_CODES[err.kind] });
       return;
     }
     throw err;
@@ -877,6 +941,7 @@ router.all(
   proxyBufferLimit,
   loadProxiedApi,
   express.raw({ type: () => true, limit: config.PROXY_MAX_REQUEST_BODY }),
+  checkPayerAllowDeny,
   checkPayerAccess,
   proxyIdempotency,
   spendSignedApiCredit,

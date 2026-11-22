@@ -10,6 +10,7 @@ import {
   type ApiCatalogSort,
 } from "./apiCatalogQuery.js";
 import { purgeExpiredApiCalls } from "./apiCallRetention.js";
+import { getApiStats } from "./apiService.js";
 
 // Catalog pagination (#147), catalog search and its index (#148) and call
 // retention (#144) against a real Postgres. Runs only when TEST_DATABASE_URL
@@ -74,6 +75,35 @@ CREATE TABLE api_calls (
   created_at timestamp NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_api_calls_api_id_created_at ON api_calls (api_id, created_at);
+CREATE TABLE api_daily_rollups (
+  id text PRIMARY KEY,
+  api_id text NOT NULL REFERENCES apis(id),
+  date text NOT NULL,
+  calls integer NOT NULL DEFAULT 0,
+  charged_calls integer NOT NULL DEFAULT 0,
+  revenue text NOT NULL DEFAULT '0',
+  unique_payers integer NOT NULL DEFAULT 0,
+  total_duration_ms integer NOT NULL DEFAULT 0,
+  refunded_calls integer NOT NULL DEFAULT 0,
+  refunded_amount text NOT NULL DEFAULT '0',
+  payers jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_at timestamp NOT NULL DEFAULT now(),
+  updated_at timestamp NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_api_daily_rollups_api_date ON api_daily_rollups (api_id, date);
+CREATE TABLE api_call_financial_records (
+  id text PRIMARY KEY,
+  api_id text NOT NULL REFERENCES apis(id),
+  payer_address text NOT NULL,
+  amount text NOT NULL,
+  tx_hash text,
+  refund_status text,
+  refund_amount text,
+  refund_tx_hash text,
+  refunded_at timestamp,
+  created_at timestamp NOT NULL
+);
+CREATE INDEX idx_api_call_financial_records_api_created ON api_call_financial_records (api_id, created_at);
 `;
 
 const migration = (name: string) =>
@@ -107,7 +137,7 @@ describePg("API catalog and call records (real Postgres)", () => {
   });
 
   beforeEach(async () => {
-    await sql`TRUNCATE api_calls, apis`;
+    await sql`TRUNCATE api_calls, apis, api_daily_rollups, api_call_financial_records`;
   });
 
   interface ApiSeed {
@@ -309,6 +339,83 @@ describePg("API catalog and call records (real Postgres)", () => {
       await insertCalls([4000, 1]);
       expect(await purgeExpiredApiCalls(db, { retentionDays: 0, batchSize: 10, now })).toBe(0);
       expect(await remainingAges()).toHaveLength(2);
+    });
+
+    it("totals are identical before and after a purge (#283)", async () => {
+      await insertApis([{ id: "ret-ident" }]);
+      await db.insert(schema.apiCalls).values([
+        {
+          id: "call-exp-1",
+          apiId: "ret-ident",
+          payerAddress: "GPAYER1",
+          amount: "0.10",
+          charged: true,
+          method: "GET",
+          path: "/items",
+          responseStatus: 200,
+          durationMs: 10,
+          createdAt: daysAgo(200),
+        },
+        {
+          id: "call-exp-2",
+          apiId: "ret-ident",
+          payerAddress: "GPAYER2",
+          amount: "0.20",
+          charged: true,
+          method: "POST",
+          path: "/items",
+          responseStatus: 200,
+          durationMs: 20,
+          createdAt: daysAgo(200),
+        },
+        {
+          id: "call-exp-3",
+          apiId: "ret-ident",
+          payerAddress: "GPAYER1",
+          amount: "0.00",
+          charged: false,
+          method: "GET",
+          path: "/free",
+          responseStatus: 200,
+          durationMs: 15,
+          createdAt: daysAgo(210),
+        },
+        {
+          id: "call-rec-1",
+          apiId: "ret-ident",
+          payerAddress: "GPAYER1",
+          amount: "0.05",
+          charged: true,
+          method: "GET",
+          path: "/items",
+          responseStatus: 200,
+          durationMs: 10,
+          createdAt: daysAgo(10),
+        },
+        {
+          id: "call-rec-2",
+          apiId: "ret-ident",
+          payerAddress: "GPAYER3",
+          amount: "0.00",
+          charged: false,
+          method: "GET",
+          path: "/free",
+          responseStatus: 200,
+          durationMs: 12,
+          createdAt: daysAgo(5),
+        },
+      ]);
+
+      const statsBefore = await getApiStats("ret-ident");
+      expect(statsBefore.calls).toBe(5);
+      expect(statsBefore.chargedCalls).toBe(3);
+      expect(statsBefore.uniquePayers).toBe(2);
+
+      const deleted = await purgeExpiredApiCalls(db, { retentionDays: 180, batchSize: 10, now });
+      expect(deleted).toBe(3);
+
+      const statsAfter = await getApiStats("ret-ident");
+      expect(statsAfter).toEqual(statsBefore);
     });
   });
 });

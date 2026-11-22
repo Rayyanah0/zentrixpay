@@ -1,3 +1,4 @@
+import { withSpan } from "../lib/spans.js";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { Router } from "express";
 import { and, eq, gt, sql } from "drizzle-orm";
@@ -293,6 +294,22 @@ export async function checkPayerAccess(
   next();
 }
 
+export function checkPayerAllowDeny(req: Request, res: Response, next: NextFunction) {
+  const header = paymentHeader(req);
+  if (!header) return next();
+
+  const api = res.locals.api as ApiRow;
+  const payer = payerFromPayment(header);
+  if (!payer.address || !payer.signed) return next();
+  if (api.payerDenylist?.includes(payer.address)) {
+    return res.status(403).json({ error: "This wallet is not allowed to call this API" });
+  }
+  if (api.payerAllowlist?.length && !api.payerAllowlist.includes(payer.address)) {
+    return res.status(403).json({ error: "This API is restricted to approved wallets" });
+  }
+  return next();
+}
+
 export async function loadProxiedApi(req: Request, res: Response, next: NextFunction) {
   const apiId = Number(req.params.apiId ?? req.params.id);
 
@@ -300,7 +317,9 @@ export async function loadProxiedApi(req: Request, res: Response, next: NextFunc
     return res.status(404).json({ error: "API not found" });
   }
 
-  const rows = await db.select().from(apis).where(eq(apis.id, apiId)).limit(1);
+  const rows = await withSpan("paywall.lookup", { "zentrixpay.api.id": apiId }, () =>
+    db.select().from(apis).where(eq(apis.id, apiId)).limit(1),
+  );
   const api = rows[0];
 
   if (!api || !api.listed) {

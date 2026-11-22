@@ -134,6 +134,21 @@ Before opening a pull request, make sure the tests for every package you touched
 
 6. **Respond to review feedback.** A maintainer will review your PR; please address comments and push follow-up commits as needed.
 
+## Merging to `main`
+
+`main` is protected by the **Protect main** repository ruleset, defined in [`.github/rulesets/main.json`](.github/rulesets/main.json):
+
+- **Required checks.** A PR can only merge when these checks pass:
+  - `Typecheck, build, lint, and tests` and `Contract formatting, lint, and tests` (the `PR checks` workflow, `.github/workflows/pr.yml`)
+  - `migrate` (the `Migrate CI` workflow, `.github/workflows/migrate-ci.yml`)
+- **Up to date.** The branch must be up to date with `main` before it merges.
+- **Merge queue.** PRs land through GitHub's merge queue, not by clicking merge directly. Choose **Merge when ready** and the queue rebuilds your PR on top of `main` plus every PR queued ahead of it, re-runs the required checks on that combined result (the `merge_group` trigger), and merges only if they pass. Two PRs that are each green alone but break each other together are caught here instead of on `main`.
+- **No force pushes or deletion** of `main`.
+
+A PR with a failing required check cannot be merged, and maintainers do not bypass the rule. If a check is failing on `main` itself, fix that first in its own PR.
+
+Maintainers apply or update the ruleset with `scripts/apply-main-ruleset.sh` (needs admin rights; it calls the GitHub rulesets API), or import the JSON under **Settings → Rules → Rulesets → New ruleset → Import a ruleset**. When a required job is renamed or added, update `.github/rulesets/main.json`, give the workflow a `merge_group` trigger, and re-apply.
+
 ## Resolving merge conflicts
 
 Several "Merge branch 'main' into …" commits have silently dropped or duplicated
