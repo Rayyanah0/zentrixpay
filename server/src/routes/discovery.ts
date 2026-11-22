@@ -31,11 +31,11 @@
  * Responses are cached for 30 s to cut DB load on discovery crawlers.
  */
 
-import { Router } from 'express';
-import { and, eq, isNull } from 'drizzle-orm';
-import { db } from '../db/index.js';
-import { apis } from '../db/schema.js';
-import { config } from '../config.js';
+import { Router } from "express";
+import { and, eq, isNull } from "drizzle-orm";
+import { db } from "../db/client.js";
+import { apis } from "../db/schema.js";
+import { config } from "../config.js";
 
 const router = Router();
 
@@ -57,7 +57,7 @@ async function buildIndex(): Promise<object> {
     proxyUrl: `${config.BASE_URL}/api/${api.id}`,
     openapiUrl: api.openapiSpec ? `${config.BASE_URL}/apis/${api.id}/openapi.json` : null,
     price: api.price,
-    currency: 'USDC',
+    currency: "USDC",
     network: api.network ?? config.NETWORK,
     payTo: api.walletAddress,
     allowedMethods: api.allowedMethods,
@@ -65,36 +65,35 @@ async function buildIndex(): Promise<object> {
     // Discovery-specific fields — populated when the provider uploads an
     // OpenAPI spec with x-input-schema / x-output-schema extensions or
     // explicitly sets these via the management API.
-    inputSchema: (api.openapiSpec as Record<string, unknown> | null)?.['x-input-schema'] ?? null,
-    outputSchema:
-      (api.openapiSpec as Record<string, unknown> | null)?.['x-output-schema'] ?? null,
-    category: (api.openapiSpec as Record<string, unknown> | null)?.['x-category'] ?? null,
+    inputSchema: (api.openapiSpec as Record<string, unknown> | null)?.["x-input-schema"] ?? null,
+    outputSchema: (api.openapiSpec as Record<string, unknown> | null)?.["x-output-schema"] ?? null,
+    category: (api.openapiSpec as Record<string, unknown> | null)?.["x-category"] ?? null,
   }));
 
   return {
-    version: '1',
-    provider: 'ZentrixPay',
+    version: "1",
+    provider: "ZentrixPay",
     baseUrl: config.BASE_URL,
     apis: apiEntries,
   };
 }
 
 // GET /.well-known/x402
-router.get('/.well-known/x402', async (_req, res) => {
+router.get("/.well-known/x402", async (_req, res) => {
   const now = Date.now();
   if (!cachedIndex || now > cacheExpiresAt) {
     try {
       cachedIndex = JSON.stringify(await buildIndex());
       cacheExpiresAt = now + CACHE_TTL_MS;
-    } catch (err) {
-      res.status(500).json({ error: 'Failed to build discovery index' });
+    } catch (_err) {
+      res.status(500).json({ error: "Failed to build discovery index" });
       return;
     }
   }
 
   res
-    .setHeader('Content-Type', 'application/json')
-    .setHeader('Cache-Control', 'public, max-age=30')
+    .setHeader("Content-Type", "application/json")
+    .setHeader("Cache-Control", "public, max-age=30")
     .end(cachedIndex);
 });
 
