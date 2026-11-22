@@ -37,7 +37,7 @@ const sample: ProfileState = {
     publisher: {
       wallet: { publicKey: "GPUB", secretKey: "SSECRET" },
       apiKey: "api-key-xyz",
-      network: "stellar:testnet",
+      network: "testnet",
     },
     buyer: {
       wallet: { publicKey: "GBUY", secretKey: "SBUY" },

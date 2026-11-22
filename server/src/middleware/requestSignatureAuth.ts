@@ -3,7 +3,6 @@ import { config } from "../config.js";
 import {
   EMPTY_BODY_HASH,
   getRequestPath,
-  hashMultipartBody,
   hashRequestBody,
   isTimestampWithinSkew,
   verifyRequestSignature,
@@ -19,16 +18,6 @@ declare global {
 }
 
 function resolveBodyHash(req: Request): string {
-  const contentType = req.headers["content-type"] ?? "";
-
-  if (contentType.includes("multipart/form-data")) {
-    const file = req.file as Express.Multer.File | undefined;
-    return hashMultipartBody(
-      req.body as Record<string, unknown>,
-      file ? { buffer: file.buffer } : undefined,
-    );
-  }
-
   if (req.rawBody !== undefined) {
     return hashRequestBody(req.rawBody);
   }

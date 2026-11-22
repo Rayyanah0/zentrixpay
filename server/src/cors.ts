@@ -1,4 +1,5 @@
 import cors, { type CorsOptions } from "cors";
+import type { Request, Response, NextFunction } from "express";
 import { config } from "./config.js";
 
 /** Headers clients may send for x402 payment retries and API auth. */
@@ -39,42 +40,59 @@ export function createCorsOptions(): CorsOptions {
   const isProduction = config.NODE_ENV === "production";
   const allowedOrigins = parseAllowedOrigins(config.ALLOWED_ORIGINS, config.WEB_APP_URL);
 
-  return {
-    origin: isProduction
-      ? (origin, callback) => {
-          // Non-browser clients (curl, server-side fetch) omit Origin.
-          if (!origin) {
-            callback(null, true);
-            return;
-          }
-          if (allowedOrigins.includes(origin)) {
-            callback(null, true);
-            return;
-          }
-          callback(new Error(`Origin ${origin} is not allowed by CORS`));
+  const origin: CorsOptions["origin"] = isProduction
+    ? (
+        requestOrigin: string | undefined,
+        callback: (err: Error | null, allow?: boolean) => void,
+      ) => {
+        // Non-browser clients (curl, server-side fetch) omit Origin.
+        if (!requestOrigin) {
+          callback(null, true);
+          return;
         }
-      : true,
+        if (allowedOrigins.includes(requestOrigin)) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
+      }
+    : true;
+
+  return {
+    origin,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: isProduction
-      ? (req, callback) => {
-          if (/^\/api\/[^/]+(?:\/|$)/.test(req.path)) {
-            const requested = req.headers["access-control-request-headers"];
-            callback(
-              null,
-              typeof requested === "string"
-                ? requested.split(",").map((header) => header.trim()).filter(Boolean)
-                : [],
-            );
-            return;
-          }
-          callback(null, [...X402_ALLOWED_HEADERS]);
-        }
-      : "*",
+    allowedHeaders: [...X402_ALLOWED_HEADERS],
     exposedHeaders: isProduction ? [...X402_EXPOSED_HEADERS] : "*",
   };
 }
 
+/**
+ * Returns a middleware that applies CORS. For API proxy paths
+ * (`/api/<slug>/…`) it reflects only the headers the client requested, so
+ * upstream-specific headers are not blocked. All other routes use the
+ * configured x402 allowlist.
+ */
 export function corsMiddleware() {
-  return cors(createCorsOptions());
+  const baseOptions = createCorsOptions();
+
+  // Pre-build the two variants to avoid rebuilding on every request.
+  const standardCors = cors(baseOptions);
+  const isProduction = config.NODE_ENV === "production";
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (isProduction && /^\/api\/[^/]+(?:\/|$)/.test(req.path)) {
+      const requested = req.headers["access-control-request-headers"];
+      const reflectedHeaders =
+        typeof requested === "string"
+          ? requested
+              .split(",")
+              .map((h) => h.trim())
+              .filter(Boolean)
+          : [];
+      const proxyCors = cors({ ...baseOptions, allowedHeaders: reflectedHeaders });
+      return proxyCors(req, res, next);
+    }
+    return standardCors(req, res, next);
+  };
 }
