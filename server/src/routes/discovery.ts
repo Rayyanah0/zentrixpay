@@ -97,7 +97,13 @@ router.get("/.well-known/x402", async (_req, res) => {
     .end(cachedIndex);
 });
 
-/** Exported so tests and other routes can invalidate the cache after a write. */
+/**
+ * Invalidate the discovery cache so the next request rebuilds the index.
+ *
+ * Call this after any write that can change what discovery serves: API
+ * create, update, archive, ownership verification and health transitions.
+ * Without it, discovery keeps serving stale data until the TTL expires.
+ */
 export function invalidateDiscoveryCache(): void {
   cachedIndex = null;
   cacheExpiresAt = 0;
