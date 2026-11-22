@@ -2,7 +2,6 @@ import {
   check,
   pgEnum,
   pgTable,
-  serial,
   text,
   timestamp,
   integer,
@@ -43,7 +42,9 @@ export const publishers = pgTable("publishers", {
 export const apis = pgTable(
   "apis",
   {
-    id: serial("id").primaryKey(),
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
     // Owning provider (migration 0009_api_proxy.sql).
     publisherId: text("publisher_id")
       .notNull()
@@ -172,22 +173,25 @@ export const apiCreditLedger = pgTable(
 export const apiCalls = pgTable(
   "api_calls",
   {
-    id: serial("id").primaryKey(),
-    apiId: integer("api_id")
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    apiId: text("api_id")
       .notNull()
       .references(() => apis.id, { onDelete: "cascade" }),
+    payerAddress: text("payer_address").notNull(),
+    amount: text("amount").notNull(),
+    charged: boolean("charged").notNull().default(false),
     method: text("method").notNull(),
     path: text("path").notNull(),
+    responseStatus: integer("response_status"),
     statusCode: integer("status_code"),
-    charged: boolean("charged").notNull().default(false),
-    amount: text("amount"),
-    asset: text("asset"),
+    durationMs: integer("duration_ms"),
+    latencyMs: integer("latency_ms"),
     payer: text("payer"),
-    payerAddress: text("payer_address"),
+    asset: text("asset"),
     txHash: text("tx_hash"),
     settlementTx: text("settlement_tx"),
-    latencyMs: integer("latency_ms"),
-    durationMs: integer("duration_ms"),
     requestHeaders: jsonb("request_headers"),
     responseHeaders: jsonb("response_headers"),
     error: text("error"),
@@ -202,7 +206,66 @@ export const apiCalls = pgTable(
     apiIdIdx: index("api_calls_api_id_idx").on(table.apiId),
     createdAtIdx: index("api_calls_created_at_idx").on(table.createdAt),
     chargedIdx: index("api_calls_charged_idx").on(table.charged),
+    payerAddressIdx: index("idx_api_calls_payer_address").on(table.payerAddress),
+    refundTxIdx: uniqueIndex("idx_api_calls_refund_tx_hash").on(table.refundTxHash),
     settlementTxIdx: index("api_calls_settlement_tx_idx").on(table.settlementTx),
+  }),
+);
+
+// Daily rollup table (#283) — calls, charged calls, revenue, unique payers per API per day
+export const apiDailyRollups = pgTable(
+  "api_daily_rollups",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    apiId: text("api_id")
+      .notNull()
+      .references(() => apis.id, { onDelete: "cascade" }),
+    date: text("date").notNull(), // YYYY-MM-DD UTC
+    calls: integer("calls").notNull().default(0),
+    chargedCalls: integer("charged_calls").notNull().default(0),
+    revenue: text("revenue").notNull().default("0"),
+    uniquePayers: integer("unique_payers").notNull().default(0),
+    totalDurationMs: integer("total_duration_ms").notNull().default(0),
+    refundedCalls: integer("refunded_calls").notNull().default(0),
+    refundedAmount: text("refunded_amount").notNull().default("0"),
+    payers: jsonb("payers").$type<string[]>().notNull().default([]),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    apiDateIdx: uniqueIndex("idx_api_daily_rollups_api_date").on(table.apiId, table.date),
+    apiIdIdx: index("idx_api_daily_rollups_api_id").on(table.apiId),
+  }),
+);
+
+// Minimal financial fields for charged calls preserved for accounting (#283)
+export const apiCallFinancialRecords = pgTable(
+  "api_call_financial_records",
+  {
+    id: text("id").primaryKey(),
+    apiId: text("api_id")
+      .notNull()
+      .references(() => apis.id, { onDelete: "cascade" }),
+    payerAddress: text("payer_address").notNull(),
+    amount: text("amount").notNull(),
+    txHash: text("tx_hash"),
+    refundStatus: text("refund_status"),
+    refundAmount: text("refund_amount"),
+    refundTxHash: text("refund_tx_hash"),
+    refundedAt: timestamp("refunded_at"),
+    createdAt: timestamp("created_at").notNull(),
+  },
+  (table) => ({
+    apiCreatedIdx: index("idx_api_call_financial_records_api_created").on(
+      table.apiId,
+      table.createdAt,
+    ),
+    apiPayerIdx: index("idx_api_call_financial_records_api_payer").on(
+      table.apiId,
+      table.payerAddress,
+    ),
   }),
 );
 

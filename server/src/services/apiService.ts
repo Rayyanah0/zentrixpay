@@ -1,13 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, gt, gte, ilike, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { apiCalls, apis } from "../db/schema.js";
+import { apiCalls, apis, apiDailyRollups, apiCallFinancialRecords } from "../db/schema.js";
 import { config, upstreamKeyRing } from "../config.js";
 import { encryptSecret } from "../utils/secretBox.js";
-import { validateUpstreamUrl } from "../lib/upstreamGuard.js";
-import { sendUpstream } from "../lib/upstreamClient.js";
 import { createTtlCache } from "../lib/ttlCache.js";
-import type { apiCatalogSortValues } from "../schemas/requests.js";
 import { statsWhere, type RecentCallsOptions, type StatsRange } from "./apiStatsQuery.js";
 import {
   FileApiCallRecordOutbox,
@@ -691,7 +688,7 @@ export async function recordHealthCheck(
  * calls were real), plus a per-API breakdown. APIs with no calls show zeros.
  */
 export async function getPublisherAnalytics(publisherId: string) {
-  const [totals] = await db
+  const [recentTotals] = await db
     .select({
       calls: sql<number>`count(*)::int`,
       chargedCalls: sql<number>`count(*) filter (where ${apiCalls.charged})::int`,
@@ -701,7 +698,17 @@ export async function getPublisherAnalytics(publisherId: string) {
     .innerJoin(apis, eq(apiCalls.apiId, apis.id))
     .where(eq(apis.publisherId, publisherId));
 
-  const perApi = await db
+  const [rollupTotals] = await db
+    .select({
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      chargedCalls: sql<number>`coalesce(sum(${apiDailyRollups.chargedCalls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+    })
+    .from(apiDailyRollups)
+    .innerJoin(apis, eq(apiDailyRollups.apiId, apis.id))
+    .where(eq(apis.publisherId, publisherId));
+
+  const perApiRecent = await db
     .select({
       id: apis.id,
       name: apis.name,
@@ -716,12 +723,45 @@ export async function getPublisherAnalytics(publisherId: string) {
     .groupBy(apis.id)
     .orderBy(desc(apis.createdAt));
 
+  const perApiRollup = await db
+    .select({
+      id: apis.id,
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      chargedCalls: sql<number>`coalesce(sum(${apiDailyRollups.chargedCalls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+    })
+    .from(apis)
+    .leftJoin(apiDailyRollups, eq(apiDailyRollups.apiId, apis.id))
+    .where(eq(apis.publisherId, publisherId))
+    .groupBy(apis.id);
+
+  const rollupMap = new Map(perApiRollup.map((r) => [r.id, r]));
+
+  const perApi = perApiRecent.map((api) => {
+    const roll = rollupMap.get(api.id);
+    const calls = (api.calls ?? 0) + (roll?.calls ?? 0);
+    const chargedCalls = (api.chargedCalls ?? 0) + (roll?.chargedCalls ?? 0);
+    const revNum = (Number(api.revenue) || 0) + (Number(roll?.revenue) || 0);
+    return {
+      id: api.id,
+      name: api.name,
+      archivedAt: api.archivedAt,
+      calls,
+      chargedCalls,
+      revenue: revNum.toString(),
+    };
+  });
+
+  const [totalCalc] = await db.execute<{ revenue: string }>(sql`
+    SELECT (coalesce(${rollupTotals?.revenue ?? "0"}::numeric, 0) + coalesce(${recentTotals?.revenue ?? "0"}::numeric, 0))::text as revenue
+  `);
+
   return {
     totals: {
       apis: perApi.length,
-      calls: totals?.calls ?? 0,
-      chargedCalls: totals?.chargedCalls ?? 0,
-      revenue: totals?.revenue ?? "0",
+      calls: (recentTotals?.calls ?? 0) + (rollupTotals?.calls ?? 0),
+      chargedCalls: (recentTotals?.chargedCalls ?? 0) + (rollupTotals?.chargedCalls ?? 0),
+      revenue: totalCalc?.revenue ?? "0",
       currency: "USDC" as const,
     },
     apis: perApi,
@@ -785,20 +825,80 @@ export async function getPublisherPayouts(publisherId: string, range: PayoutRang
 }
 
 export async function getApiStats(apiId: string, range: StatsRange = {}) {
-  const [totals] = await db
+  const [recentTotals] = await db
     .select({
       calls: sql<number>`count(*)::int`,
       chargedCalls: sql<number>`count(*) filter (where ${apiCalls.charged})::int`,
       revenue: sql<string>`coalesce(sum(${apiCalls.amount}::numeric) filter (where ${apiCalls.charged}), 0)::text`,
-      uniquePayers: sql<number>`count(distinct ${apiCalls.payerAddress}) filter (where ${apiCalls.charged})::int`,
-      avgDurationMs: sql<number>`coalesce(avg(${apiCalls.durationMs}), 0)::int`,
+      totalDurationMs: sql<number>`coalesce(sum(${apiCalls.durationMs}), 0)::bigint`,
       refundedCalls: sql<number>`count(*) filter (where ${apiCalls.refundStatus} = 'refunded')::int`,
       refunded: sql<string>`coalesce(sum(${apiCalls.refundAmount}::numeric) filter (where ${apiCalls.refundStatus} = 'refunded'), 0)::text`,
-      netRevenue: sql<string>`(coalesce(sum(${apiCalls.amount}::numeric) filter (where ${apiCalls.charged}), 0) - coalesce(sum(${apiCalls.refundAmount}::numeric) filter (where ${apiCalls.refundStatus} = 'refunded'), 0))::text`,
     })
     .from(apiCalls)
     .where(statsWhere(apiId, range));
-  return { ...totals, currency: "USDC" };
+
+  const from = range.from ?? range.since;
+  const rollupConditions = [eq(apiDailyRollups.apiId, apiId)];
+  if (from) {
+    rollupConditions.push(gte(apiDailyRollups.date, from.toISOString().slice(0, 10)));
+  }
+  if (range.to) {
+    rollupConditions.push(lt(apiDailyRollups.date, range.to.toISOString().slice(0, 10)));
+  }
+
+  const [rollupTotals] = await db
+    .select({
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      chargedCalls: sql<number>`coalesce(sum(${apiDailyRollups.chargedCalls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+      totalDurationMs: sql<number>`coalesce(sum(${apiDailyRollups.totalDurationMs}), 0)::bigint`,
+      refundedCalls: sql<number>`coalesce(sum(${apiDailyRollups.refundedCalls}), 0)::int`,
+      refunded: sql<string>`coalesce(sum(${apiDailyRollups.refundedAmount}::numeric), 0)::text`,
+    })
+    .from(apiDailyRollups)
+    .where(and(...rollupConditions));
+
+  const finConditions = [eq(apiCallFinancialRecords.apiId, apiId)];
+  if (from) finConditions.push(gte(apiCallFinancialRecords.createdAt, from));
+  if (range.to) finConditions.push(lt(apiCallFinancialRecords.createdAt, range.to));
+
+  const [uniqueResult] = await db.execute<{ count: number }>(sql`
+    SELECT count(distinct payer_address)::int as count FROM (
+      SELECT ${apiCalls.payerAddress} as payer_address
+      FROM ${apiCalls}
+      WHERE ${statsWhere(apiId, range)} AND ${apiCalls.charged}
+      UNION
+      SELECT ${apiCallFinancialRecords.payerAddress} as payer_address
+      FROM ${apiCallFinancialRecords}
+      WHERE ${and(...finConditions)}
+    ) combined_payers
+  `);
+
+  const calls = (rollupTotals?.calls ?? 0) + (recentTotals?.calls ?? 0);
+  const chargedCalls = (rollupTotals?.chargedCalls ?? 0) + (recentTotals?.chargedCalls ?? 0);
+  const totalDuration =
+    Number(rollupTotals?.totalDurationMs ?? 0) + Number(recentTotals?.totalDurationMs ?? 0);
+  const avgDurationMs = calls > 0 ? Math.round(totalDuration / calls) : 0;
+  const refundedCalls = (rollupTotals?.refundedCalls ?? 0) + (recentTotals?.refundedCalls ?? 0);
+
+  const [calc] = await db.execute<{ revenue: string; refunded: string; netRevenue: string }>(sql`
+    SELECT
+      (coalesce(${rollupTotals?.revenue ?? "0"}::numeric, 0) + coalesce(${recentTotals?.revenue ?? "0"}::numeric, 0))::text as revenue,
+      (coalesce(${rollupTotals?.refunded ?? "0"}::numeric, 0) + coalesce(${recentTotals?.refunded ?? "0"}::numeric, 0))::text as refunded,
+      (coalesce(${rollupTotals?.revenue ?? "0"}::numeric, 0) + coalesce(${recentTotals?.revenue ?? "0"}::numeric, 0) - (coalesce(${rollupTotals?.refunded ?? "0"}::numeric, 0) + coalesce(${recentTotals?.refunded ?? "0"}::numeric, 0)))::text as "netRevenue"
+  `);
+
+  return {
+    calls,
+    chargedCalls,
+    revenue: calc?.revenue ?? "0",
+    uniquePayers: uniqueResult?.count ?? 0,
+    avgDurationMs,
+    refundedCalls,
+    refunded: calc?.refunded ?? "0",
+    netRevenue: calc?.netRevenue ?? "0",
+    currency: "USDC" as const,
+  };
 }
 
 /**
@@ -832,7 +932,7 @@ export async function getApiTimeSeries(
   apiId: string,
   days: 7 | 30 | 90,
 ): Promise<TimeSeriesPoint[]> {
-  const rows = await db
+  const recentRows = await db
     .select({
       date: sql<string>`to_char(date_trunc('day', ${apiCalls.createdAt} at time zone 'UTC'), 'YYYY-MM-DD')`,
       calls: sql<number>`count(*)::int`,
@@ -848,8 +948,35 @@ export async function getApiTimeSeries(
     .groupBy(sql`1`)
     .orderBy(sql`1`);
 
-  // Build a map so we can fill in missing dates with zeros.
-  const byDate = new Map(rows.map((r) => [r.date, r]));
+  const rollupRows = await db
+    .select({
+      date: apiDailyRollups.date,
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+    })
+    .from(apiDailyRollups)
+    .where(
+      and(
+        eq(apiDailyRollups.apiId, apiId),
+        sql`${apiDailyRollups.date} >= to_char(now() - interval '${sql.raw(String(days))} days', 'YYYY-MM-DD')`,
+      ),
+    )
+    .groupBy(apiDailyRollups.date)
+    .orderBy(apiDailyRollups.date);
+
+  const byDate = new Map<string, { calls: number; revenue: number }>();
+  for (const r of rollupRows) {
+    byDate.set(r.date, { calls: r.calls, revenue: Number(r.revenue) || 0 });
+  }
+  for (const r of recentRows) {
+    const existing = byDate.get(r.date);
+    if (existing) {
+      existing.calls += r.calls;
+      existing.revenue += Number(r.revenue) || 0;
+    } else {
+      byDate.set(r.date, { calls: r.calls, revenue: Number(r.revenue) || 0 });
+    }
+  }
 
   const result: TimeSeriesPoint[] = [];
   const now = new Date();
@@ -857,7 +984,7 @@ export async function getApiTimeSeries(
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i));
     const dateStr = d.toISOString().slice(0, 10);
     const row = byDate.get(dateStr);
-    result.push({ date: dateStr, calls: row?.calls ?? 0, revenue: row?.revenue ?? "0" });
+    result.push({ date: dateStr, calls: row?.calls ?? 0, revenue: (row?.revenue ?? 0).toString() });
   }
   return result;
 }
