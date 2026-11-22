@@ -2,6 +2,9 @@
 node_modules/
 .pnpm-store/
 
+# npm lock file (this is a pnpm workspace; package-lock.json is not used)
+package-lock.json
+
 # Builds
 dist/
 web/stats.html
