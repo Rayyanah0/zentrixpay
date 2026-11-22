@@ -299,7 +299,7 @@ export function resolveApiPrice(
   return matched?.price ?? api.price;
 }
 
-export function checkPayerAccess(req: Request, res: Response, next: NextFunction) {
+export function checkPayerAllowDeny(req: Request, res: Response, next: NextFunction) {
   const header = paymentHeader(req);
   if (!header) return next();
 

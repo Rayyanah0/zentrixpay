@@ -12,7 +12,12 @@ import { requestSignatureAuth } from "../middleware/requestSignatureAuth.js";
 import { payeeSignatureAuth } from "../middleware/payeeSignatureAuth.js";
 import { validate } from "../middleware/validate.js";
 import { publishIpRateLimit, publishWalletRateLimit } from "../middleware/rateLimiters.js";
-import { apiPaywall, checkPayerAccess, loadProxiedApi } from "../middleware/apiPaywall.js";
+import {
+  apiPaywall,
+  checkPayerAccess,
+  checkPayerAllowDeny,
+  loadProxiedApi,
+} from "../middleware/apiPaywall.js";
 import { createIpRateLimiter } from "../middleware/rateLimit.js";
 import { getRateLimitStore } from "../lib/rateLimit/index.js";
 import {
@@ -886,6 +891,7 @@ router.all(
   proxyBufferLimit,
   loadProxiedApi,
   express.raw({ type: () => true, limit: config.PROXY_MAX_REQUEST_BODY }),
+  checkPayerAllowDeny,
   checkPayerAccess,
   proxyIdempotency,
   spendSignedApiCredit,
