@@ -13,6 +13,7 @@ import { requestSignatureAuth } from "../middleware/requestSignatureAuth.js";
 import { payeeSignatureAuth } from "../middleware/payeeSignatureAuth.js";
 import { validate } from "../middleware/validate.js";
 import { publishIpRateLimit, publishWalletRateLimit } from "../middleware/rateLimiters.js";
+import { ownershipVerifyRateLimit } from "../middleware/ownershipVerifyRateLimit.js";
 import {
   apiPaywall,
   checkPayerAccess,
@@ -262,15 +263,22 @@ router.delete("/apis/:id", apiKeyAuth, requestSignatureAuth, async (req, res) =>
   }
 });
 
-// POST /apis/:id/verify-ownership — check /.well-known/zentrixpay.txt, then list (owner)
-router.post("/apis/:id/verify-ownership", apiKeyAuth, requestSignatureAuth, async (req, res) => {
-  try {
-    const api = await getOwnedApi(req.params.id as string, req.publisher!.id);
-    res.json(toOwnerApi(await verifyOwnership(api)));
-  } catch (err) {
-    sendServiceError(res, err);
-  }
-});
+// POST /apis/:id/verify-ownership — check /.well-known/zentrixpay.txt, then list (owner).
+// Rate-limited per provider and per API: each call makes outbound HTTP/DNS requests (#289).
+router.post(
+  "/apis/:id/verify-ownership",
+  apiKeyAuth,
+  requestSignatureAuth,
+  ...ownershipVerifyRateLimit,
+  async (req, res) => {
+    try {
+      const api = await getOwnedApi(req.params.id as string, req.publisher!.id);
+      res.json(toOwnerApi(await verifyOwnership(api)));
+    } catch (err) {
+      sendServiceError(res, err);
+    }
+  },
+);
 
 // GET /apis/:id/stats?from=&to=&limit=&offset= — call counts, revenue and paged call
 // history for one window (owner; archived APIs included). `from` is inclusive and
@@ -683,8 +691,7 @@ async function proxyHandler(req: Request, res: Response) {
   } satisfies StoredProxyResponse;
 
   const completeProxyIdempotency = res.locals.completeProxyIdempotency as
-    | ((response: StoredProxyResponse) => Promise<void>)
-    | undefined;
+    ((response: StoredProxyResponse) => Promise<void>) | undefined;
   if (completeProxyIdempotency && upstream.status < 400) {
     res.locals.preserveProxyIdempotencyClaim = true;
     await completeProxyIdempotency({

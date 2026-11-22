@@ -149,4 +149,31 @@ A PR with a failing required check cannot be merged, and maintainers do not bypa
 
 Maintainers apply or update the ruleset with `scripts/apply-main-ruleset.sh` (needs admin rights; it calls the GitHub rulesets API), or import the JSON under **Settings → Rules → Rulesets → New ruleset → Import a ruleset**. When a required job is renamed or added, update `.github/rulesets/main.json`, give the workflow a `merge_group` trigger, and re-apply.
 
+## Resolving merge conflicts
+
+Several "Merge branch 'main' into …" commits have silently dropped or duplicated
+code while resolving conflicts. When you merge or rebase `main` into your branch:
+
+1. **Resolve each conflict deliberately.** Keep both sides' intent; don't just
+   pick "ours" or "theirs" for a whole file. Watch for duplicated functions,
+   imports and `try` blocks where both versions were kept.
+2. **Review the merge diff**, not just your own changes:
+
+   ```bash
+   git diff main...HEAD      # everything your PR changes relative to main
+   git show --remerge-diff HEAD   # what the merge commit itself changed
+   ```
+
+   Anything in there you didn't mean to touch is a sign code was lost.
+
+3. **Re-run typecheck and tests after the merge**, even if they passed before:
+
+   ```bash
+   pnpm --filter server typecheck
+   pnpm -r test
+   ```
+
+4. **Tick the conflict checklist item** in the PR template, and mention in the
+   PR description which files had conflicts so reviewers can look at them.
+
 Thanks again for contributing to ZentrixPay!
