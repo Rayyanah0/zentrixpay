@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import { z } from "zod";
 import { envBoolean } from "./lib/envBoolean.js";
+import { logger as rootLogger } from "./lib/logger.js";
 
 dotenv.config();
 
@@ -31,6 +32,10 @@ const envSchema = z.object({
 
   // Postgres
   DATABASE_URL: z.string().min(1, "DATABASE_URL (Postgres connection string) is required"),
+  // Pool sizing and query guards (see docs/environment-variables.md).
+  DB_POOL_MAX: z.coerce.number().int().min(1).max(200).default(10),
+  DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).max(600_000).default(30_000),
+  DB_SLOW_QUERY_MS: z.coerce.number().int().min(0).max(600_000).default(500),
 
   // Limits
   // Explicit JSON body limit for express.json() (e.g. "1mb", "512kb").
@@ -101,6 +106,10 @@ const envSchema = z.object({
   // Default and ceiling for a single upstream call. Kept under REQUEST_TIMEOUT_MS.
   PROXY_DEFAULT_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
   PROXY_MAX_TIMEOUT_MS: z.coerce.number().int().positive().default(25_000),
+  // Minimum notice (hours) a provider must give before a scheduled price takes effect.
+  PRICE_CHANGE_MIN_NOTICE_HOURS: z.coerce.number().min(0).default(24),
+  // How often the worker applies scheduled price changes that have come due.
+  PRICE_CHANGE_WORKER_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   // Idempotency-Key replay for paid calls: record lifetime and largest cached
   // response. The entry-count limit applies to the in-memory test store only.
   PROXY_IDEMPOTENCY_TTL_MS: z.coerce.number().int().positive().default(3_600_000),
@@ -138,11 +147,17 @@ const envSchema = z.object({
   // capped at this delay. Set to 0 to disable backoff.
   HEALTH_CHECK_MAX_BACKOFF_MS: z.coerce.number().int().min(0).default(3_600_000),
 
+  // Background workers (health checks, retention, recovery, webhook delivery)
+  // start only when this is true. Set false on API-only instances (#207).
+  RUN_BACKGROUND_WORKERS: envBoolean(true),
+
   // Provider webhooks for charged calls (#36). Delays between attempts grow
   // as WEBHOOK_RETRY_BASE_MS * 4^n.
   WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
   WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),
   WEBHOOK_RETRY_BASE_MS: z.coerce.number().int().positive().default(1_000),
+  // How often the delivery worker polls the webhook outbox (#208).
+  WEBHOOK_DELIVERY_INTERVAL_MS: z.coerce.number().int().min(0).default(5_000),
 
   // Retention of api_calls rows (#144, docs/api-call-retention.md). Rows older
   // than API_CALL_RETENTION_DAYS are deleted every API_CALL_RETENTION_INTERVAL_MS,

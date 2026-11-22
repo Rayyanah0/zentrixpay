@@ -63,12 +63,19 @@ provider time-series reaches back 90 days and popularity ranking 7 days.
 
 ## What changes once a row expires
 
-- Lifetime totals in API stats (`calls`, `revenue`, `uniquePayers`, …) cover
-  only the retention window.
-- The call can no longer be refunded through ZentrixPay. Providers who want to
-  refund should do so within the window (the payment itself remains visible
-  on-chain through `tx_hash`).
-- Payer history no longer lists it.
+- Before rows are purged, they are aggregated into a daily rollup table
+  (`api_daily_rollups`) tracking calls, charged calls, revenue, duration, refunds,
+  and unique payers per API per day.
+- Minimal financial fields for charged calls (`amount`, `payer_address`,
+  `tx_hash`, and refund state) are preserved in `api_call_financial_records`
+  for accounting history (#283).
+- Lifetime totals in API statistics (`calls`, `revenue`, `uniquePayers`, `netRevenue`)
+  and provider analytics are computed from rollups plus recent rows, keeping
+  totals identical before and after purges.
+- The call can no longer be refunded through ZentrixPay once purged from active
+  records. Providers who want to refund should do so within the window (the
+  payment itself remains visible on-chain through `tx_hash`).
+- Payer recent call history no longer lists detailed individual purged calls.
 
 On-chain data (settlement transactions, receipts) is public and outside this
 policy.

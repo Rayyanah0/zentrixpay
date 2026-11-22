@@ -1,13 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, gt, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, ilike, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { apiCalls, apis } from "../db/schema.js";
+import { apiCalls, apis, apiDailyRollups, apiCallFinancialRecords } from "../db/schema.js";
 import { config, upstreamKeyRing } from "../config.js";
 import { encryptSecret } from "../utils/secretBox.js";
-import { validateUpstreamUrl } from "../lib/upstreamGuard.js";
-import { sendUpstream } from "../lib/upstreamClient.js";
 import { createTtlCache } from "../lib/ttlCache.js";
-import type { apiCatalogSortValues } from "../schemas/requests.js";
 import { statsWhere, type RecentCallsOptions, type StatsRange } from "./apiStatsQuery.js";
 import {
   FileApiCallRecordOutbox,
@@ -23,6 +20,20 @@ import { logger as rootLogger } from "../lib/logger.js";
 export { statsWhere, type RecentCallsOptions, type StatsRange } from "./apiStatsQuery.js";
 
 export type ApiRow = typeof apis.$inferSelect;
+
+/**
+ * Thrown by service functions to signal a known HTTP-mappable failure.
+ * Routes catch this and forward `statusCode` and `message` to the response.
+ */
+export class ApiServiceError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiServiceError";
+  }
+}
 
 // Hot proxied APIs are looked up on every call (#34). Every write to an API
 // goes through this module and invalidates its entry, so edits apply at once
@@ -55,6 +66,8 @@ export function toPublicApi(api: ApiRow) {
     description: api.description,
     price: api.price,
     currency: "USDC",
+    // Issue #228: an upcoming price change, so agents can see it before it applies.
+    pendingPriceChange: pendingPriceChangeOf(api),
     walletAddress: api.walletAddress,
     allowedMethods: api.allowedMethods,
     priceRules: api.priceRules ?? [],
@@ -244,6 +257,7 @@ function toOwnerApi(api: ApiRecord): OwnerApi {
     upstreamUrl: api.upstreamUrl,
     upstreamMethod: api.upstreamMethod,
     price: api.price,
+    pendingPriceChange: pendingPriceChangeOf(api),
     walletAddress: api.walletAddress,
     listed: api.listed,
     ownershipVerified: api.ownershipVerified,
@@ -392,6 +406,67 @@ export interface UpdateApiInput {
   passPrice?: string | null;
   /** Issue #32: 0 disables free calls. */
   freeCallsPerDay?: number;
+  /** Issue #228: a future price and when it takes effect; null cancels a pending change. */
+  scheduledPrice?: string | null;
+  effectiveAt?: string | null;
+}
+
+/**
+ * Issue #228: validate a scheduled price change and return the column values to
+ * write. Returns {} when the update does not touch the schedule.
+ * A new `price` supersedes any pending change, so the schedule is cleared with it.
+ */
+export function scheduledPriceChanges(
+  api: Pick<ApiRow, "price" | "scheduledPrice" | "effectiveAt">,
+  input: Pick<UpdateApiInput, "price" | "scheduledPrice" | "effectiveAt">,
+  now: Date = new Date(),
+): { scheduledPrice: string | null; effectiveAt: Date | null } | Record<string, never> {
+  if (input.scheduledPrice === undefined && input.effectiveAt === undefined) {
+    if (input.price !== undefined && input.price !== api.price && api.scheduledPrice) {
+      return { scheduledPrice: null, effectiveAt: null };
+    }
+    return {};
+  }
+  if (input.scheduledPrice === null) {
+    return { scheduledPrice: null, effectiveAt: null };
+  }
+  if (input.scheduledPrice === undefined || input.effectiveAt === undefined || input.effectiveAt === null) {
+    throw new ApiServiceError(422, "scheduledPrice and effectiveAt must be provided together");
+  }
+  const effectiveAt = new Date(input.effectiveAt);
+  const minNoticeMs = config.PRICE_CHANGE_MIN_NOTICE_HOURS * 60 * 60 * 1000;
+  if (effectiveAt.getTime() < now.getTime() + minNoticeMs) {
+    throw new ApiServiceError(
+      422,
+      `effectiveAt must be at least ${config.PRICE_CHANGE_MIN_NOTICE_HOURS} hours from now`,
+    );
+  }
+  if (input.scheduledPrice === api.price) {
+    throw new ApiServiceError(422, "scheduledPrice must differ from the current price");
+  }
+  return { scheduledPrice: input.scheduledPrice, effectiveAt };
+}
+
+/** Issue #228: promote every scheduled price whose effective time has passed. Returns the number applied. */
+export async function applyDuePriceChanges(now: Date = new Date()): Promise<number> {
+  const due = await db
+    .update(apis)
+    .set({
+      price: sql`${apis.scheduledPrice}`,
+      scheduledPrice: null,
+      effectiveAt: null,
+    })
+    .where(
+      and(isNotNull(apis.scheduledPrice), isNotNull(apis.effectiveAt), lte(apis.effectiveAt, now)),
+    )
+    .returning({ id: apis.id });
+  return due.length;
+}
+
+/** The pending price change shown to callers and the owner, or null when none is scheduled. */
+export function pendingPriceChangeOf(api: Pick<ApiRow, "scheduledPrice" | "effectiveAt">) {
+  if (!api.scheduledPrice || !api.effectiveAt) return null;
+  return { price: api.scheduledPrice, effectiveAt: api.effectiveAt.toISOString(), currency: "USDC" as const };
 }
 
 export async function updateApi(api: ApiRow, input: UpdateApiInput): Promise<ApiRow> {
@@ -399,6 +474,12 @@ export async function updateApi(api: ApiRow, input: UpdateApiInput): Promise<Api
   // so the on-chain record never drifts from what callers are charged.
   if (api.onchainStatus === "registered" || api.onchainStatus === "pending") {
     if (input.price !== undefined && input.price !== api.price) {
+      throw new ApiServiceError(
+        409,
+        `This API's price is anchored on-chain; change it with POST /apis/${api.id}/price/prepare`,
+      );
+    }
+    if (input.scheduledPrice !== undefined) {
       throw new ApiServiceError(
         409,
         `This API's price is anchored on-chain; change it with POST /apis/${api.id}/price/prepare`,
@@ -412,10 +493,13 @@ export async function updateApi(api: ApiRow, input: UpdateApiInput): Promise<Api
     }
   }
 
+  const schedule = scheduledPriceChanges(api, input);
+
   const changes: Partial<typeof apis.$inferInsert> = {
     name: input.name,
     description: input.description,
     price: input.price,
+    ...schedule,
     priceRules: input.priceRules === null ? [] : input.priceRules,
     walletAddress: input.walletAddress,
     allowedMethods: input.allowedMethods,
@@ -614,7 +698,7 @@ export async function recordHealthCheck(
  * calls were real), plus a per-API breakdown. APIs with no calls show zeros.
  */
 export async function getPublisherAnalytics(publisherId: string) {
-  const [totals] = await db
+  const [recentTotals] = await db
     .select({
       calls: sql<number>`count(*)::int`,
       chargedCalls: sql<number>`count(*) filter (where ${apiCalls.charged})::int`,
@@ -624,7 +708,17 @@ export async function getPublisherAnalytics(publisherId: string) {
     .innerJoin(apis, eq(apiCalls.apiId, apis.id))
     .where(eq(apis.publisherId, publisherId));
 
-  const perApi = await db
+  const [rollupTotals] = await db
+    .select({
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      chargedCalls: sql<number>`coalesce(sum(${apiDailyRollups.chargedCalls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+    })
+    .from(apiDailyRollups)
+    .innerJoin(apis, eq(apiDailyRollups.apiId, apis.id))
+    .where(eq(apis.publisherId, publisherId));
+
+  const perApiRecent = await db
     .select({
       id: apis.id,
       name: apis.name,
@@ -639,33 +733,182 @@ export async function getPublisherAnalytics(publisherId: string) {
     .groupBy(apis.id)
     .orderBy(desc(apis.createdAt));
 
+  const perApiRollup = await db
+    .select({
+      id: apis.id,
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      chargedCalls: sql<number>`coalesce(sum(${apiDailyRollups.chargedCalls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+    })
+    .from(apis)
+    .leftJoin(apiDailyRollups, eq(apiDailyRollups.apiId, apis.id))
+    .where(eq(apis.publisherId, publisherId))
+    .groupBy(apis.id);
+
+  const rollupMap = new Map(perApiRollup.map((r) => [r.id, r]));
+
+  const perApi = perApiRecent.map((api) => {
+    const roll = rollupMap.get(api.id);
+    const calls = (api.calls ?? 0) + (roll?.calls ?? 0);
+    const chargedCalls = (api.chargedCalls ?? 0) + (roll?.chargedCalls ?? 0);
+    const revNum = (Number(api.revenue) || 0) + (Number(roll?.revenue) || 0);
+    return {
+      id: api.id,
+      name: api.name,
+      archivedAt: api.archivedAt,
+      calls,
+      chargedCalls,
+      revenue: revNum.toString(),
+    };
+  });
+
+  const [totalCalc] = await db.execute<{ revenue: string }>(sql`
+    SELECT (coalesce(${rollupTotals?.revenue ?? "0"}::numeric, 0) + coalesce(${recentTotals?.revenue ?? "0"}::numeric, 0))::text as revenue
+  `);
+
   return {
     totals: {
       apis: perApi.length,
-      calls: totals?.calls ?? 0,
-      chargedCalls: totals?.chargedCalls ?? 0,
-      revenue: totals?.revenue ?? "0",
+      calls: (recentTotals?.calls ?? 0) + (rollupTotals?.calls ?? 0),
+      chargedCalls: (recentTotals?.chargedCalls ?? 0) + (rollupTotals?.chargedCalls ?? 0),
+      revenue: totalCalc?.revenue ?? "0",
       currency: "USDC" as const,
     },
     apis: perApi,
   };
 }
 
+export interface PayoutRange {
+  from?: Date;
+  to?: Date;
+}
+
+export interface PayoutRow {
+  payeeWallet: string;
+  apiId: string;
+  apiName: string;
+  chargedCalls: number;
+  revenue: string;
+}
+
+/**
+ * Charged revenue for a publisher, grouped by the payee wallet each API pays
+ * out to and by API. `from` is inclusive and `to` exclusive, matching the
+ * stats windows, so back-to-back periods never double count a call.
+ */
+export async function getPublisherPayouts(publisherId: string, range: PayoutRange = {}) {
+  const conditions = [eq(apis.publisherId, publisherId), eq(apiCalls.charged, true)];
+  if (range.from) conditions.push(gte(apiCalls.createdAt, range.from));
+  if (range.to) conditions.push(lt(apiCalls.createdAt, range.to));
+
+  const rows: PayoutRow[] = await db
+    .select({
+      payeeWallet: apis.walletAddress,
+      apiId: sql<string>`${apis.id}::text`,
+      apiName: apis.name,
+      chargedCalls: sql<number>`count(${apiCalls.id})::int`,
+      revenue: sql<string>`coalesce(sum(${apiCalls.amount}::numeric), 0)::text`,
+    })
+    .from(apiCalls)
+    .innerJoin(apis, eq(apiCalls.apiId, apis.id))
+    .where(and(...conditions))
+    .groupBy(apis.walletAddress, apis.id, apis.name)
+    .orderBy(apis.walletAddress, apis.name);
+
+  // Totals come from SQL numerics so they match the rows exactly (no float drift).
+  const [total] = await db
+    .select({
+      chargedCalls: sql<number>`count(${apiCalls.id})::int`,
+      revenue: sql<string>`coalesce(sum(${apiCalls.amount}::numeric), 0)::text`,
+    })
+    .from(apiCalls)
+    .innerJoin(apis, eq(apiCalls.apiId, apis.id))
+    .where(and(...conditions));
+
+  return {
+    from: range.from?.toISOString() ?? null,
+    to: range.to?.toISOString() ?? null,
+    currency: "USDC" as const,
+    totals: { chargedCalls: total?.chargedCalls ?? 0, revenue: total?.revenue ?? "0" },
+    rows,
+  };
+}
+
 export async function getApiStats(apiId: string, range: StatsRange = {}) {
-  const [totals] = await db
+  const [recentTotals] = await db
     .select({
       calls: sql<number>`count(*)::int`,
       chargedCalls: sql<number>`count(*) filter (where ${apiCalls.charged})::int`,
       revenue: sql<string>`coalesce(sum(${apiCalls.amount}::numeric) filter (where ${apiCalls.charged}), 0)::text`,
-      uniquePayers: sql<number>`count(distinct ${apiCalls.payerAddress}) filter (where ${apiCalls.charged})::int`,
-      avgDurationMs: sql<number>`coalesce(avg(${apiCalls.durationMs}), 0)::int`,
+      totalDurationMs: sql<number>`coalesce(sum(${apiCalls.durationMs}), 0)::bigint`,
       refundedCalls: sql<number>`count(*) filter (where ${apiCalls.refundStatus} = 'refunded')::int`,
       refunded: sql<string>`coalesce(sum(${apiCalls.refundAmount}::numeric) filter (where ${apiCalls.refundStatus} = 'refunded'), 0)::text`,
-      netRevenue: sql<string>`(coalesce(sum(${apiCalls.amount}::numeric) filter (where ${apiCalls.charged}), 0) - coalesce(sum(${apiCalls.refundAmount}::numeric) filter (where ${apiCalls.refundStatus} = 'refunded'), 0))::text`,
     })
     .from(apiCalls)
     .where(statsWhere(apiId, range));
-  return { ...totals, currency: "USDC" };
+
+  const from = range.from ?? range.since;
+  const rollupConditions = [eq(apiDailyRollups.apiId, apiId)];
+  if (from) {
+    rollupConditions.push(gte(apiDailyRollups.date, from.toISOString().slice(0, 10)));
+  }
+  if (range.to) {
+    rollupConditions.push(lt(apiDailyRollups.date, range.to.toISOString().slice(0, 10)));
+  }
+
+  const [rollupTotals] = await db
+    .select({
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      chargedCalls: sql<number>`coalesce(sum(${apiDailyRollups.chargedCalls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+      totalDurationMs: sql<number>`coalesce(sum(${apiDailyRollups.totalDurationMs}), 0)::bigint`,
+      refundedCalls: sql<number>`coalesce(sum(${apiDailyRollups.refundedCalls}), 0)::int`,
+      refunded: sql<string>`coalesce(sum(${apiDailyRollups.refundedAmount}::numeric), 0)::text`,
+    })
+    .from(apiDailyRollups)
+    .where(and(...rollupConditions));
+
+  const finConditions = [eq(apiCallFinancialRecords.apiId, apiId)];
+  if (from) finConditions.push(gte(apiCallFinancialRecords.createdAt, from));
+  if (range.to) finConditions.push(lt(apiCallFinancialRecords.createdAt, range.to));
+
+  const [uniqueResult] = await db.execute<{ count: number }>(sql`
+    SELECT count(distinct payer_address)::int as count FROM (
+      SELECT ${apiCalls.payerAddress} as payer_address
+      FROM ${apiCalls}
+      WHERE ${statsWhere(apiId, range)} AND ${apiCalls.charged}
+      UNION
+      SELECT ${apiCallFinancialRecords.payerAddress} as payer_address
+      FROM ${apiCallFinancialRecords}
+      WHERE ${and(...finConditions)}
+    ) combined_payers
+  `);
+
+  const calls = (rollupTotals?.calls ?? 0) + (recentTotals?.calls ?? 0);
+  const chargedCalls = (rollupTotals?.chargedCalls ?? 0) + (recentTotals?.chargedCalls ?? 0);
+  const totalDuration =
+    Number(rollupTotals?.totalDurationMs ?? 0) + Number(recentTotals?.totalDurationMs ?? 0);
+  const avgDurationMs = calls > 0 ? Math.round(totalDuration / calls) : 0;
+  const refundedCalls = (rollupTotals?.refundedCalls ?? 0) + (recentTotals?.refundedCalls ?? 0);
+
+  const [calc] = await db.execute<{ revenue: string; refunded: string; netRevenue: string }>(sql`
+    SELECT
+      (coalesce(${rollupTotals?.revenue ?? "0"}::numeric, 0) + coalesce(${recentTotals?.revenue ?? "0"}::numeric, 0))::text as revenue,
+      (coalesce(${rollupTotals?.refunded ?? "0"}::numeric, 0) + coalesce(${recentTotals?.refunded ?? "0"}::numeric, 0))::text as refunded,
+      (coalesce(${rollupTotals?.revenue ?? "0"}::numeric, 0) + coalesce(${recentTotals?.revenue ?? "0"}::numeric, 0) - (coalesce(${rollupTotals?.refunded ?? "0"}::numeric, 0) + coalesce(${recentTotals?.refunded ?? "0"}::numeric, 0)))::text as "netRevenue"
+  `);
+
+  return {
+    calls,
+    chargedCalls,
+    revenue: calc?.revenue ?? "0",
+    uniquePayers: uniqueResult?.count ?? 0,
+    avgDurationMs,
+    refundedCalls,
+    refunded: calc?.refunded ?? "0",
+    netRevenue: calc?.netRevenue ?? "0",
+    currency: "USDC" as const,
+  };
 }
 
 /**
@@ -699,7 +942,7 @@ export async function getApiTimeSeries(
   apiId: string,
   days: 7 | 30 | 90,
 ): Promise<TimeSeriesPoint[]> {
-  const rows = await db
+  const recentRows = await db
     .select({
       date: sql<string>`to_char(date_trunc('day', ${apiCalls.createdAt} at time zone 'UTC'), 'YYYY-MM-DD')`,
       calls: sql<number>`count(*)::int`,
@@ -715,8 +958,35 @@ export async function getApiTimeSeries(
     .groupBy(sql`1`)
     .orderBy(sql`1`);
 
-  // Build a map so we can fill in missing dates with zeros.
-  const byDate = new Map(rows.map((r) => [r.date, r]));
+  const rollupRows = await db
+    .select({
+      date: apiDailyRollups.date,
+      calls: sql<number>`coalesce(sum(${apiDailyRollups.calls}), 0)::int`,
+      revenue: sql<string>`coalesce(sum(${apiDailyRollups.revenue}::numeric), 0)::text`,
+    })
+    .from(apiDailyRollups)
+    .where(
+      and(
+        eq(apiDailyRollups.apiId, apiId),
+        sql`${apiDailyRollups.date} >= to_char(now() - interval '${sql.raw(String(days))} days', 'YYYY-MM-DD')`,
+      ),
+    )
+    .groupBy(apiDailyRollups.date)
+    .orderBy(apiDailyRollups.date);
+
+  const byDate = new Map<string, { calls: number; revenue: number }>();
+  for (const r of rollupRows) {
+    byDate.set(r.date, { calls: r.calls, revenue: Number(r.revenue) || 0 });
+  }
+  for (const r of recentRows) {
+    const existing = byDate.get(r.date);
+    if (existing) {
+      existing.calls += r.calls;
+      existing.revenue += Number(r.revenue) || 0;
+    } else {
+      byDate.set(r.date, { calls: r.calls, revenue: Number(r.revenue) || 0 });
+    }
+  }
 
   const result: TimeSeriesPoint[] = [];
   const now = new Date();
@@ -724,7 +994,7 @@ export async function getApiTimeSeries(
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i));
     const dateStr = d.toISOString().slice(0, 10);
     const row = byDate.get(dateStr);
-    result.push({ date: dateStr, calls: row?.calls ?? 0, revenue: row?.revenue ?? "0" });
+    result.push({ date: dateStr, calls: row?.calls ?? 0, revenue: (row?.revenue ?? 0).toString() });
   }
   return result;
 }
