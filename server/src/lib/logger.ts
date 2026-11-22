@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import pino from "pino";
 
 /**
@@ -48,5 +49,26 @@ export const logger = pino({
     };
   },
 });
+
+/**
+ * Returns the shared logger instance. Provided as a function so callers can
+ * import `getLogger` and call it without needing to reference the named export
+ * directly (matches the usage pattern across the codebase).
+ */
+export function getLogger() {
+  return logger;
+}
+
+// ── Request-scoped context ───────────────────────────────────────────────────
+
+const requestIdStorage = new AsyncLocalStorage<string>();
+
+/**
+ * Run `fn` with `requestId` bound to the current async context. Any call to
+ * `getLogger()` inside `fn` will include the request ID automatically.
+ */
+export function runWithRequestContext(requestId: string, fn: () => void): void {
+  requestIdStorage.run(requestId, fn);
+}
 
 export default logger;

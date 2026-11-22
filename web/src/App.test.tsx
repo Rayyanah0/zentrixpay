@@ -10,6 +10,7 @@ import {
   type OwnerApi,
   type PublicApi,
 } from "./api/apis.js";
+import { makeOwnerApi, makePublicApi } from "./test/fixtures.js";
 
 vi.mock("./api/apis.js", async () => {
   const actual = await vi.importActual<typeof import("./api/apis.js")>("./api/apis.js");
@@ -26,41 +27,9 @@ vi.mock("./api/apis.js", async () => {
   };
 });
 
-const weather: PublicApi = {
-  id: "api1",
-  name: "Weather API",
-  description: "Forecasts for any city",
-  price: "0.01",
-  priceRules: [],
-  currency: "USDC",
-  walletAddress: "GPROVIDER",
-  allowedMethods: ["GET", "POST"],
-  tags: ["weather"],
-  healthy: true,
-  proxyUrl: "http://gw.test/api/api1",
-  openapiUrl: null,
-  onchain: { registered: false, contractId: "", txHash: null },
-  createdAt: "2026-10-01T00:00:00Z",
-};
+const weather: PublicApi = makePublicApi();
 
-const owned: OwnerApi = {
-  ...weather,
-  upstreamUrl: "https://api.example.com/v1",
-  upstreamHeaderName: null,
-  hasUpstreamSecret: false,
-  timeoutMs: null,
-  maxResponseBytes: null,
-  webhookUrl: null,
-  hasWebhookSecret: false,
-  healthPath: null,
-  health: { healthy: true, consecutiveFailures: 0, lastCheckedAt: null },
-  listed: false,
-  ownershipVerified: false,
-  ownershipVerification: {
-    url: "https://api.example.com/.well-known/zentrixpay.txt",
-    expectedContent: "zentrixpay-verification=abc",
-  },
-};
+const owned: OwnerApi = makeOwnerApi();
 
 beforeEach(() => {
   vi.mocked(fetchApis).mockReset().mockResolvedValue([weather]);

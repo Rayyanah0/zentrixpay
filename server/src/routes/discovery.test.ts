@@ -45,14 +45,13 @@ const mockApis = [
   },
 ];
 
-vi.mock("../db/index.js", () => ({ db: {} }));
 vi.mock("drizzle-orm", async (importOriginal) => {
   const actual = await importOriginal<typeof import("drizzle-orm")>();
   return { ...actual };
 });
 
 // Mock the drizzle db query chain used in discovery.ts
-vi.mock("../db/index.js", () => {
+vi.mock("../db/client.js", () => {
   const select = vi.fn().mockReturnThis();
   const from = vi.fn().mockReturnThis();
   const where = vi.fn().mockResolvedValue(mockApis);

@@ -94,6 +94,35 @@
   color: "a371f7"
   description: "Contributor wave 3"
 
+# ── Priority ────────────────────────────────────────────────────────────────
+# Zero or one per issue. Only for work that must jump the queue.
+- name: "priority: critical"
+  color: "b60205"
+  description: "Blocks the product or main; fix first"
+- name: "priority: high"
+  color: "d93f0b"
+  description: "Important; fix soon after critical"
+
+# ── Topic ───────────────────────────────────────────────────────────────────
+# Cross-cutting concerns, added alongside the area/type labels.
+- name: "accessibility"
+  color: "f143ab"
+  description: "Barrier affecting people with disabilities"
+
+# ── Programs ────────────────────────────────────────────────────────────────
+- name: "Stellar Wave"
+  color: "5555ff"
+  description: "Issues in the Stellar wave program"
+
+# ── Security scan ───────────────────────────────────────────────────────────
+# Applied to PRs by the malware scan and by the maintainer who reviews it.
+- name: "security: flagged"
+  color: "b60205"
+  description: "Malware scan found something that needs a maintainer's attention"
+- name: "security: reviewed"
+  color: "0e8a16"
+  description: "A maintainer reviewed the sensitive changes the malware scan flagged"
+
 # ── Workflow / status (GitHub defaults we keep) ─────────────────────────────
 - name: "help wanted"
   color: "008672"

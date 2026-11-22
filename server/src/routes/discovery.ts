@@ -33,7 +33,7 @@
 
 import { Router } from "express";
 import { and, eq, isNull } from "drizzle-orm";
-import { db } from "../db/index.js";
+import { db } from "../db/client.js";
 import { apis } from "../db/schema.js";
 import { config } from "../config.js";
 
@@ -85,7 +85,7 @@ router.get("/.well-known/x402", async (_req, res) => {
     try {
       cachedIndex = JSON.stringify(await buildIndex());
       cacheExpiresAt = now + CACHE_TTL_MS;
-    } catch (err) {
+    } catch (_err) {
       res.status(500).json({ error: "Failed to build discovery index" });
       return;
     }
@@ -97,7 +97,13 @@ router.get("/.well-known/x402", async (_req, res) => {
     .end(cachedIndex);
 });
 
-/** Exported so tests and other routes can invalidate the cache after a write. */
+/**
+ * Invalidate the discovery cache so the next request rebuilds the index.
+ *
+ * Call this after any write that can change what discovery serves: API
+ * create, update, archive, ownership verification and health transitions.
+ * Without it, discovery keeps serving stale data until the TTL expires.
+ */
 export function invalidateDiscoveryCache(): void {
   cachedIndex = null;
   cacheExpiresAt = 0;

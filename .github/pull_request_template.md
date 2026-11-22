@@ -21,6 +21,7 @@
 - [ ] PR title follows Conventional Commits (`feat:`, `fix:`, `chore:`, etc.)
 - [ ] Build passes (`pnpm build:server` / `pnpm --filter @zentrixpay/web build`)
 - [ ] Tests pass (`pnpm test`)
+- [ ] If this PR resolves merge conflicts, I re-ran typecheck and tests after the merge (see [Resolving merge conflicts](../CONTRIBUTING.md#resolving-merge-conflicts))
 - [ ] Contract changes tested (`pnpm contract:test`)
 - [ ] No secrets committed (`.env` is gitignored; use `.env.example` for placeholders)
 - [ ] Docs/comments updated if behaviour changed
