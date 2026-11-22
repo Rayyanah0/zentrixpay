@@ -4,6 +4,27 @@ import { verifyPayeeSignature } from "../utils/payeeSignature.js";
 import type { ApiRow } from "../services/apiService.js";
 
 /**
+ * In-memory store of payee-change signatures that have already been used.
+ *
+ * A payee-change signature is valid for up to SIGNATURE_MAX_SKEW_MS, so a
+ * captured signature could otherwise be replayed within that window (e.g. to
+ * switch the payee back after the owner reverted a change). We record each
+ * accepted signature and reject any subsequent use until it would have
+ * expired anyway.
+ *
+ * Keyed by the raw signature header; the value is the expiry timestamp (ms).
+ */
+const usedSignatures = new Map<string, number>();
+
+function pruneUsedSignatures(nowMs: number): void {
+  for (const [key, expiresAt] of usedSignatures) {
+    if (expiresAt <= nowMs) {
+      usedSignatures.delete(key);
+    }
+  }
+}
+
+/**
  * Enforces a payee-wallet signature when a PATCH /apis/:id request includes a
  * `walletAddress` change.
  *
@@ -20,7 +41,12 @@ import type { ApiRow } from "../services/apiService.js";
  * person requesting the change controls that wallet and prevents an API-key
  * holder from silently redirecting revenue.
  *
+ * Each signature is single-use: once accepted it is recorded (with a TTL equal
+ * to the clock-skew window) and any replay is rejected.
+ *
  * The api row must be attached to res.locals.api before this middleware runs.
+ * If it is missing, the request is rejected (fail closed) rather than skipping
+ * the payee-signature check.
  */
 export function payeeSignatureAuth(req: Request, res: Response, next: NextFunction): void {
   const body = req.body as Record<string, unknown>;
@@ -32,8 +58,14 @@ export function payeeSignatureAuth(req: Request, res: Response, next: NextFuncti
     return;
   }
 
+  // Fail closed: a walletAddress change requires the api row to verify against.
+  if (!api) {
+    res.status(500).json({ error: "API context not loaded" });
+    return;
+  }
+
   // If the address hasn't changed, no signature needed
-  if (!api || body.walletAddress === api.walletAddress) {
+  if (body.walletAddress === api.walletAddress) {
     next();
     return;
   }
@@ -58,13 +90,24 @@ export function payeeSignatureAuth(req: Request, res: Response, next: NextFuncti
     return;
   }
 
+  const nowMs = Date.now();
+  pruneUsedSignatures(nowMs);
+
+  // Reject replays of an already-consumed signature.
+  if (usedSignatures.has(signatureHeader)) {
+    res.status(403).json({
+      error: "X-Payee-Signature has already been used",
+    });
+    return;
+  }
+
   const result = verifyPayeeSignature({
     currentPayeeAddress: api.walletAddress,
     apiId: api.id,
     newWalletAddress,
     timestampHeader,
     signatureHeader,
-    nowMs: Date.now(),
+    nowMs,
     maxSkewMs: config.SIGNATURE_MAX_SKEW_MS,
   });
 
@@ -81,6 +124,10 @@ export function payeeSignatureAuth(req: Request, res: Response, next: NextFuncti
     });
     return;
   }
+
+  // Mark the signature as consumed. It only needs to be remembered until the
+  // timestamp would fall outside the skew window anyway.
+  usedSignatures.set(signatureHeader, nowMs + config.SIGNATURE_MAX_SKEW_MS);
 
   next();
 }

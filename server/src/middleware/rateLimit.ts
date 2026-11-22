@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
-import { getLogger } from "../lib/logger.js";
+import { logger } from "../lib/logger.js";
 import type { RateLimitStore } from "../lib/rateLimit/index.js";
 import { parsePayerFromXPayment } from "../lib/parseXPayment.js";
 import { rateLimitCounter } from "../lib/metrics.js";
@@ -69,7 +69,7 @@ export function createRateLimiter(options: RateLimiterOptions): RequestHandler {
       next();
     } catch (err) {
       // Fail open when the shared store is unavailable so traffic isn't blocked entirely.
-      getLogger().warn({ event: "rate_limit_store_error", err, key }, "rate limit store error");
+      logger.warn({ event: "rate_limit_store_error", err, key }, "rate limit store error");
       next();
     }
   };
@@ -114,5 +114,6 @@ export function extractPayerFromPaymentHeader(req: Request): string | undefined 
   if (!header || typeof header !== "string") {
     return undefined;
   }
-  return parsePayerFromXPayment(header).payer;
+  const { payer } = parsePayerFromXPayment(header);
+  return payer;
 }

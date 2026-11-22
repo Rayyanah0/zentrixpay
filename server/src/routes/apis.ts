@@ -13,7 +13,12 @@ import { requestSignatureAuth } from "../middleware/requestSignatureAuth.js";
 import { payeeSignatureAuth } from "../middleware/payeeSignatureAuth.js";
 import { validate } from "../middleware/validate.js";
 import { publishIpRateLimit, publishWalletRateLimit } from "../middleware/rateLimiters.js";
-import { apiPaywall, checkPayerAccess, loadProxiedApi } from "../middleware/apiPaywall.js";
+import {
+  apiPaywall,
+  checkPayerAccess,
+  checkPayerAllowDeny,
+  loadProxiedApi,
+} from "../middleware/apiPaywall.js";
 import { createIpRateLimiter } from "../middleware/rateLimit.js";
 import { getRateLimitStore } from "../lib/rateLimit/index.js";
 import {
@@ -51,7 +56,6 @@ import {
 import { getApiCreditBalance, purchaseApiCredits } from "../services/apiCredits.js";
 import { statsPagination } from "../services/apiStatsQuery.js";
 import { apiCreditPurchaseReference } from "../lib/apiCreditSignature.js";
-import { deliverChargedCallWebhook } from "../services/webhookService.js";
 import {
   confirmApiPrice,
   confirmApiRegistration,
@@ -67,7 +71,7 @@ import {
   type ProxyIdempotencyKey,
   type StoredProxyResponse,
 } from "../lib/idempotency.js";
-import { deliverChargedCallWebhook } from "../services/webhookService.js";
+import { chargedCallWebhookEntry } from "../services/webhookService.js";
 import { decryptSecret } from "../utils/secretBox.js";
 import { stroopsToUsdc, usdcToStroops } from "../utils/usdc.js";
 import { getLogger } from "../lib/logger.js";
@@ -97,22 +101,34 @@ function sendServiceError(res: Response, err: unknown): void {
 // ── Management ────────────────────────────────────────────────────────────────
 
 // POST /apis/import/preview — validate and group an OpenAPI JSON/YAML document without writes.
-router.post("/apis/import/preview", apiKeyAuth, openApiUpload.single("document"), async (req, res) => {
-  const raw = req.file?.buffer.toString("utf8") ?? req.body?.document ?? req.body?.openapiSpec;
-  if (!raw) {
-    res.status(400).json({ error: "Provide document as JSON/YAML text, document, or openapiSpec" });
-    return;
-  }
-  const result = previewBulkOpenApi(raw);
-  res.status(result.errors.length > 0 ? 422 : 200).json({ groups: result.groups, errors: result.errors });
-});
+router.post(
+  "/apis/import/preview",
+  apiKeyAuth,
+  openApiUpload.single("document"),
+  async (req, res) => {
+    const raw = req.file?.buffer.toString("utf8") ?? req.body?.document ?? req.body?.openapiSpec;
+    if (!raw) {
+      res
+        .status(400)
+        .json({ error: "Provide document as JSON/YAML text, document, or openapiSpec" });
+      return;
+    }
+    const result = previewBulkOpenApi(raw);
+    res
+      .status(result.errors.length > 0 ? 422 : 200)
+      .json({ groups: result.groups, errors: result.errors });
+  },
+);
 
 // POST /apis/import — confirm selected preview groups and register them atomically.
 router.post("/apis/import", apiKeyAuth, openApiUpload.single("document"), async (req, res) => {
   const raw = req.file?.buffer.toString("utf8") ?? req.body?.document ?? req.body?.openapiSpec;
   const defaults = req.body?.defaults ?? req.body;
   if (!raw || typeof defaults?.price !== "string") {
-    res.status(400).json({ error: "document and defaults.price are required; walletAddress defaults to the publisher wallet" });
+    res.status(400).json({
+      error:
+        "document and defaults.price are required; walletAddress defaults to the publisher wallet",
+    });
     return;
   }
   const selected = Array.isArray(req.body?.groups) ? req.body.groups : undefined;
@@ -124,7 +140,9 @@ router.post("/apis/import", apiKeyAuth, openApiUpload.single("document"), async 
     });
     res.status(201).json(result);
   } catch (error) {
-    res.status(422).json({ error: error instanceof Error ? error.message : "OpenAPI import failed" });
+    res
+      .status(422)
+      .json({ error: error instanceof Error ? error.message : "OpenAPI import failed" });
   }
 });
 
@@ -510,19 +528,36 @@ async function proxyHandler(req: Request, res: Response) {
     const settlement = settlementFrom(res);
     const charged = res.statusCode < 400;
     const callId = randomUUID();
+    const payerAddress =
+      (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement);
+    const amount = (res.locals.apiCallPrice as string | undefined) ?? api.price;
+    // Stored minimized: identifiers and the query string are dropped (#144).
+    const path = minimizeCallPath(
+      target.pathname.slice(new URL(api.upstreamUrl).pathname.replace(/\/+$/, "").length) || "/",
+    );
+    const durationMs = Date.now() - started;
     recordApiCall({
       callId,
       apiId: api.id,
       charged,
-      payerAddress: (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement),
-      amount: (res.locals.apiCallPrice as string | undefined) ?? api.price,
+      payerAddress,
+      amount,
       method: req.method,
-      // Stored minimized: identifiers and the query string are dropped (#144).
-      path: minimizeCallPath(
-        target.pathname.slice(new URL(api.upstreamUrl).pathname.replace(/\/+$/, "").length) || "/",
-      ),
+      path,
       responseStatus: res.statusCode,
-      durationMs: Date.now() - started,
+      durationMs,
+      // Charged-call webhook goes to the outbox in the same transaction (#208).
+      webhook: charged
+        ? chargedCallWebhookEntry(api, {
+            callId,
+            payerAddress,
+            amount,
+            method: req.method,
+            path,
+            responseStatus: res.statusCode,
+            durationMs,
+          })
+        : undefined,
     }).catch((err) =>
       // Only reached when the recovery spool itself could not be written (#134).
       getLogger().error(
@@ -884,6 +919,7 @@ router.all(
   proxyBufferLimit,
   loadProxiedApi,
   express.raw({ type: () => true, limit: config.PROXY_MAX_REQUEST_BODY }),
+  checkPayerAllowDeny,
   checkPayerAccess,
   proxyIdempotency,
   spendSignedApiCredit,
