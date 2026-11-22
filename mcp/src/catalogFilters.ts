@@ -41,8 +41,7 @@ export interface CatalogFilters {
 }
 
 export type ParseCatalogFiltersResult =
-  | { ok: true; filters: CatalogFilters }
-  | { ok: false; error: string };
+  { ok: true; filters: CatalogFilters } | { ok: false; error: string };
 
 function parseListed(value: unknown): boolean | undefined | "invalid" {
   if (value === undefined || value === null || value === "") return undefined;

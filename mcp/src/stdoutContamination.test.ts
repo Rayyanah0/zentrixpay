@@ -150,5 +150,4 @@ describe("stdout contamination regression", () => {
     expect(stdoutWriteSpy).not.toHaveBeenCalled();
     expect(consoleLogSpy).not.toHaveBeenCalled();
   });
-
 });

@@ -104,7 +104,28 @@
       "idx": 14,
       "version": "7",
       "when": 1795200000000,
-      "tag": "0013_webhook_secret_rotation",
+      "tag": "0013_webhook_deliveries",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1795300000000,
+      "tag": "0014_price_change_notice",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1795400000000,
+      "tag": "0015_api_daily_rollups",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795500000000,
+      "tag": "0016_webhook_secret_rotation",
       "breakpoints": true
     }
   ]

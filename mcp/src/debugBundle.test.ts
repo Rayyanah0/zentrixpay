@@ -205,7 +205,10 @@ describe("buildDebugBundle", () => {
     for (const key of DEBUG_BUNDLE_OUTPUT_SCHEMA.required) {
       expect(a, `bundle has ${key}`).toHaveProperty(key);
     }
-    expect(a.sanitized.maskedEnvironment).toEqual(["ZENTRIXPAY_AGENT_SECRET", "ZENTRIXPAY_API_KEY"]);
+    expect(a.sanitized.maskedEnvironment).toEqual([
+      "ZENTRIXPAY_AGENT_SECRET",
+      "ZENTRIXPAY_API_KEY",
+    ]);
     expect(a.sanitized.rules.length).toBeGreaterThan(0);
   });
 

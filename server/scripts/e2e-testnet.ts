@@ -2,7 +2,16 @@ import { spawn, ChildProcess } from "child_process";
 import * as http from "http";
 import * as path from "path";
 import * as fs from "fs";
-import { Address, Keypair, Networks, TransactionBuilder, Operation, Asset, Account, Horizon } from "@stellar/stellar-sdk";
+import {
+  Address,
+  Keypair,
+  Networks,
+  TransactionBuilder,
+  Operation,
+  Asset,
+  Account,
+  Horizon,
+} from "@stellar/stellar-sdk";
 
 /**
  * End-to-end testnet test of the pay-per-call flow.
@@ -53,8 +62,7 @@ const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const MOCK_UPSTREAM_PORT = parseInt(process.env.MOCK_UPSTREAM_PORT || "4100", 10);
 const SERVER_START_CMD = process.env.SERVER_START_CMD || "npm run start";
-const SERVER_CWD =
-  process.env.SERVER_CWD || path.resolve(__dirname, "..", "..");
+const SERVER_CWD = process.env.SERVER_CWD || path.resolve(__dirname, "..", "..");
 const API_PRICE = process.env.API_PRICE || "1000000";
 const API_ASSET = process.env.API_ASSET || "USDC";
 const SKIP_SERVER_START = process.env.SKIP_SERVER_START === "1";
@@ -99,7 +107,7 @@ function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
     fail(
-      `Missing required environment variable ${name}. See the header comment in this script for documentation.`
+      `Missing required environment variable ${name}. See the header comment in this script for documentation.`,
     );
   }
   return value as string;
@@ -182,7 +190,7 @@ async function startServer(): Promise<void> {
 
 async function registerProviderAndApi(
   providerWallet: string,
-  upstreamUrl: string
+  upstreamUrl: string,
 ): Promise<RegistrationResponse> {
   const providerRes = await fetch(`${BASE_URL}/apis/providers`, {
     method: "POST",
@@ -194,9 +202,7 @@ async function registerProviderAndApi(
   });
 
   if (!providerRes.ok) {
-    fail(
-      `Failed to register provider: ${providerRes.status} ${await providerRes.text()}`
-    );
+    fail(`Failed to register provider: ${providerRes.status} ${await providerRes.text()}`);
   }
   const provider = (await providerRes.json()) as RegistrationResponse;
   log(`Registered provider ${provider.id}`);
@@ -224,16 +230,9 @@ async function registerProviderAndApi(
 
 function extractOwnershipToken(api: RegistrationResponse): string {
   const token =
-    api.ownershipToken ||
-    api.ownership_token ||
-    api.verificationToken ||
-    api.verification_token;
+    api.ownershipToken || api.ownership_token || api.verificationToken || api.verification_token;
   if (!token) {
-    fail(
-      `Registration response did not include an ownership token: ${JSON.stringify(
-        api
-      )}`
-    );
+    fail(`Registration response did not include an ownership token: ${JSON.stringify(api)}`);
   }
   return token as string;
 }
@@ -246,9 +245,7 @@ async function verifyOwnership(apiId: string): Promise<void> {
   });
 
   if (!res.ok) {
-    fail(
-      `Ownership verification failed: ${res.status} ${await res.text()}`
-    );
+    fail(`Ownership verification failed: ${res.status} ${await res.text()}`);
   }
   log(`Ownership verified for API ${apiId}`);
 }
@@ -267,8 +264,7 @@ function getCalls(stats: StatsResponse): number {
 }
 
 function getRevenue(stats: StatsResponse): number {
-  const value =
-    stats.revenue ?? stats.totalRevenue ?? stats.total_revenue ?? 0;
+  const value = stats.revenue ?? stats.totalRevenue ?? stats.total_revenue ?? 0;
   return typeof value === "string" ? parseFloat(value) : value;
 }
 
@@ -280,19 +276,13 @@ function getRevenue(stats: StatsResponse): number {
  * transaction, sign it with the funded testnet wallet, and retry the request
  * with the signed payment attached.
  */
-async function paidCall(
-  apiId: string,
-  payer: Keypair,
-  providerWallet: string
-): Promise<Response> {
+async function paidCall(apiId: string, payer: Keypair, providerWallet: string): Promise<Response> {
   const callUrl = `${BASE_URL}/api/${apiId}`;
 
   // Initial request: expect a 402 with payment requirements.
   const initial = await fetch(callUrl, { method: "GET" });
   if (initial.status !== 402) {
-    fail(
-      `Expected HTTP 402 from paid endpoint, got ${initial.status}: ${await initial.text()}`
-    );
+    fail(`Expected HTTP 402 from paid endpoint, got ${initial.status}: ${await initial.text()}`);
   }
 
   const bodyText = await initial.text();
@@ -305,24 +295,13 @@ async function paidCall(
 
   // x402 payment requirement may be nested under `accepts` or `payment`.
   const accepts =
-    requirement.accepts?.[0] ||
-    requirement.payment ||
-    requirement.requirements ||
-    requirement;
+    requirement.accepts?.[0] || requirement.payment || requirement.requirements || requirement;
 
-  const amount: string =
-    accepts.maxAmountRequired ||
-    accepts.amount ||
-    accepts.price ||
-    API_PRICE;
-  const asset: string =
-    accepts.asset || accepts.assetCode || API_ASSET;
-  const payTo: string =
-    accepts.payTo || accepts.pay_to || accepts.address || providerWallet;
+  const amount: string = accepts.maxAmountRequired || accepts.amount || accepts.price || API_PRICE;
+  const asset: string = accepts.asset || accepts.assetCode || API_ASSET;
+  const payTo: string = accepts.payTo || accepts.pay_to || accepts.address || providerWallet;
 
-  log(
-    `Payment requirement: amount=${amount} asset=${asset} payTo=${payTo}`
-  );
+  log(`Payment requirement: amount=${amount} asset=${asset} payTo=${payTo}`);
 
   const horizon = new Horizon.Server(HORIZON_URL);
   const sourceAccount = await horizon.loadAccount(payer.publicKey());
@@ -337,19 +316,19 @@ async function paidCall(
     {
       fee: "100000",
       networkPassphrase: NETWORK_PASSPHRASE,
-    }
+    },
   )
     .addOperation(
       Operation.payment({
         destination: payTo,
         asset: paymentAsset,
         amount: normalizeAmount(amount, isNative),
-      })
+      }),
     )
     .addMemo(
       // Include the API id so the facilitator can correlate the payment.
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      require("@stellar/stellar-sdk").Memo.text(`api:${apiId}`.slice(0, 28))
+      require("@stellar/stellar-sdk").Memo.text(`api:${apiId}`.slice(0, 28)),
     )
     .setTimeout(180)
     .build();
@@ -368,9 +347,7 @@ async function paidCall(
   });
 
   if (!paid.ok) {
-    fail(
-      `Paid call failed: ${paid.status} ${await paid.text()}`
-    );
+    fail(`Paid call failed: ${paid.status} ${await paid.text()}`);
   }
 
   log(`Paid call succeeded with status ${paid.status}`);
@@ -451,9 +428,7 @@ async function main(): Promise<void> {
   const statsBefore = await fetchStats(api.id);
   const callsBefore = getCalls(statsBefore);
   const revenueBefore = getRevenue(statsBefore);
-  log(
-    `Stats before call: calls=${callsBefore} revenue=${revenueBefore}`
-  );
+  log(`Stats before call: calls=${callsBefore} revenue=${revenueBefore}`);
 
   await paidCall(api.id, payer, providerWallet);
 
@@ -466,14 +441,10 @@ async function main(): Promise<void> {
   log(`Stats after call: calls=${callsAfter} revenue=${revenueAfter}`);
 
   if (callsAfter <= callsBefore) {
-    fail(
-      `Expected call count to increase (before=${callsBefore}, after=${callsAfter})`
-    );
+    fail(`Expected call count to increase (before=${callsBefore}, after=${callsAfter})`);
   }
   if (revenueAfter <= revenueBefore) {
-    fail(
-      `Expected revenue to increase (before=${revenueBefore}, after=${revenueAfter})`
-    );
+    fail(`Expected revenue to increase (before=${revenueBefore}, after=${revenueAfter})`);
   }
 
   log("E2E testnet test PASSED");

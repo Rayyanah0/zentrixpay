@@ -10,8 +10,7 @@ const DAY_MS = 86_400_000;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export type StatsRangeResult =
-  | { ok: true; from?: string; to?: string }
-  | { ok: false; error: string };
+  { ok: true; from?: string; to?: string } | { ok: false; error: string };
 
 function parseDay(value: string): number | null {
   if (!DAY_RE.test(value)) return null;

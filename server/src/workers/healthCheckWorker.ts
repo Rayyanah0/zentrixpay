@@ -1,5 +1,8 @@
 import { config, upstreamKeyRing } from "../config.js";
-import { getLogger } from "../lib/logger.js";
+import { pgClient } from "../db/client.js";
+import { runWithAdvisoryLock, WORKER_LOCK_KEYS } from "../lib/workerLock.js";
+import { logger } from "../lib/logger.js";
+import { isHealthCheckDue } from "../lib/healthBackoff.js";
 import { sendUpstream } from "../lib/upstreamClient.js";
 import { decryptSecret } from "../utils/secretBox.js";
 import {
@@ -14,7 +17,9 @@ import {
 // marked unhealthy, which hides it from GET /apis and makes the proxy answer
 // 503 before asking for payment. One successful check brings it back.
 //
-// Runs in every replica; checks are idempotent, so duplicates only add load.
+// Runs in every replica, but each tick takes a Postgres advisory lock first
+// (#207), so across N instances a tick runs once and health_failures updates
+// do not race. Set RUN_BACKGROUND_WORKERS=false on API-only instances.
 
 const CONCURRENCY = 5;
 
@@ -23,7 +28,7 @@ let running = false;
 
 export function startHealthCheckWorker(): void {
   if (config.HEALTH_CHECK_INTERVAL_MS <= 0) return;
-  getLogger().info(
+  logger.info(
     { event: "health_worker_start", intervalMs: config.HEALTH_CHECK_INTERVAL_MS },
     "starting upstream health-check worker",
   );
@@ -50,8 +55,17 @@ export async function checkApiHealth(api: ApiRow): Promise<boolean> {
     );
   }
   try {
+    const url = new URL(healthCheckUrl(api));
+    // ...and upstreams that authenticate with a secret query parameter (e.g. ?api_key=)
+    // need it on the health-check URL, matching what the proxy sends.
+    if (api.upstreamQueryName && api.upstreamQueryValueEnc && upstreamKeyRing.length > 0) {
+      url.searchParams.set(
+        api.upstreamQueryName,
+        decryptSecret(api.upstreamQueryValueEnc, upstreamKeyRing, config.UPSTREAM_SECRET_KEY),
+      );
+    }
     const res = await sendUpstream({
-      url: healthCheckUrl(api),
+      url: url.toString(),
       method: "GET",
       headers,
       timeoutMs: config.HEALTH_CHECK_TIMEOUT_MS,
@@ -68,7 +82,7 @@ async function checkOne(api: ApiRow): Promise<void> {
   const ok = await checkApiHealth(api);
   const updated = await recordHealthCheck(api, ok, config.HEALTH_CHECK_FAILURE_THRESHOLD);
   if (updated.healthy !== api.healthy) {
-    getLogger().warn(
+    logger.warn(
       {
         event: updated.healthy ? "api_upstream_recovered" : "api_upstream_unhealthy",
         apiId: api.id,
@@ -84,11 +98,31 @@ async function tick(): Promise<void> {
   if (running) return;
   running = true;
   try {
-    const queue = await listApisForHealthCheck();
+    await runWithAdvisoryLock(pgClient, WORKER_LOCK_KEYS.healthCheck, runHealthChecks);
+  } catch (err) {
+    logger.error({ event: "health_worker_tick_error", err }, "health worker tick failed");
+  } finally {
+    running = false;
+  }
+}
+
+async function runHealthChecks(): Promise<void> {
+  try {
+    // Persistently failing APIs are skipped until their backoff window passes (#220).
+    const now = new Date();
+    const queue = (await listApisForHealthCheck()).filter((api) =>
+      isHealthCheckDue(
+        api,
+        now,
+        config.HEALTH_CHECK_INTERVAL_MS,
+        config.HEALTH_CHECK_FAILURE_THRESHOLD,
+        config.HEALTH_CHECK_MAX_BACKOFF_MS,
+      ),
+    );
     const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
       for (let api = queue.shift(); api; api = queue.shift()) {
         await checkOne(api).catch((err) =>
-          getLogger().error(
+          logger.error(
             { event: "health_check_error", apiId: api!.id, err },
             "health check failed to run",
           ),
@@ -97,8 +131,6 @@ async function tick(): Promise<void> {
     });
     await Promise.all(workers);
   } catch (err) {
-    getLogger().error({ event: "health_worker_tick_error", err }, "health worker tick failed");
-  } finally {
-    running = false;
+    logger.error({ event: "health_worker_tick_error", err }, "health worker tick failed");
   }
 }

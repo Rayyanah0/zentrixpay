@@ -446,9 +446,9 @@ describe("repairSponsoredAccount", () => {
   it("does not restore a key when Horizon says the account is missing", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(mockResponse({}, false, 404));
 
-    await expect(dispatchTool("zentrixpay_repair_sponsored_account", { secretKey })).rejects.toThrow(
-      /does not exist.*no local key was changed/i,
-    );
+    await expect(
+      dispatchTool("zentrixpay_repair_sponsored_account", { secretKey }),
+    ).rejects.toThrow(/does not exist.*no local key was changed/i);
   });
 });
 
@@ -801,7 +801,6 @@ describe("API health preflight before mutation tools (#603)", () => {
     ).rejects.toThrow("No wallet in profile");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
-
 });
 
 // ── half-completed sponsored-account creation (#839) ────────────────────────

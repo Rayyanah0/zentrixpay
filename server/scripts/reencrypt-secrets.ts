@@ -104,7 +104,10 @@ async function reencryptColumn(
     }
 
     if (!DRY_RUN) {
-      await db.update(apis).set({ [col]: reencoded }).where(eq(apis.id, apiId));
+      await db
+        .update(apis)
+        .set({ [col]: reencoded })
+        .where(eq(apis.id, apiId));
     }
     stats.reencrypted++;
     console.log(`  [${DRY_RUN ? "dry" : "done"}] ${apiId}.${col}`);

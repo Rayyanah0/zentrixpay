@@ -1,7 +1,4 @@
-import {
-  createIpRateLimiter,
-  createWalletRateLimiter,
-} from "../middleware/rateLimit.js";
+import { createIpRateLimiter, createWalletRateLimiter } from "../middleware/rateLimit.js";
 import { config } from "../config.js";
 import { getRateLimitStore } from "../lib/rateLimit/index.js";
 import type { RequestHandler } from "express";

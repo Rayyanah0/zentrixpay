@@ -1,0 +1,6 @@
+# Commits that only reformat code. Use with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub's blame view reads this file automatically.
+
+# style: format server, web, packages and mcp with prettier (#291)
+214c2f8b14f49d3ea24a41d78904495d3222ce84

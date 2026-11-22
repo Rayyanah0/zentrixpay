@@ -4,6 +4,7 @@
     "subtitle": "Pay-per-call APIs. One HTTP call, one USDC payment on Stellar — no accounts, no subscriptions.",
     "tab_browse": "Browse APIs",
     "tab_provide": "Sell your API",
+    "tab_access": "My access",
     "theme_light": "Light",
     "theme_dark": "Dark",
     "theme_toggle_label": "Toggle light/dark theme",
@@ -123,5 +124,23 @@
   "language": {
     "switch_to": "Español",
     "label": "Language"
+  },
+  "access": {
+    "heading": "Your passes and credits",
+    "connect_prompt": "Connect your wallet to see the access passes and prepaid credits it holds.",
+    "load": "Show my passes and credits",
+    "refresh": "Refresh",
+    "loading": "Waiting for wallet signature…",
+    "load_failed": "Could not load your passes and credits.",
+    "passes_heading": "Active passes",
+    "no_passes": "No active passes.",
+    "expires_in_minutes_one": "Expires in {{count}} minute",
+    "expires_in_minutes_other": "Expires in {{count}} minutes",
+    "expires_in_hours_one": "Expires in {{count}} hour",
+    "expires_in_hours_other": "Expires in {{count}} hours",
+    "credits_heading": "Prepaid credits",
+    "no_credits": "No prepaid credits.",
+    "credits_left_one": "{{count}} call left",
+    "credits_left_other": "{{count}} calls left"
   }
 }

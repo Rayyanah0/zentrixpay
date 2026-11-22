@@ -8,11 +8,19 @@ import express, {
 } from "express";
 import multer from "multer";
 import { apiKeyAuth } from "../middleware/apiKeyAuth.js";
+import { writeCallsCsv } from "../services/apiCallsExport.js";
 import { requestSignatureAuth } from "../middleware/requestSignatureAuth.js";
 import { payeeSignatureAuth } from "../middleware/payeeSignatureAuth.js";
+import { walletSignatureAuth } from "../middleware/walletSignatureAuth.js";
 import { validate } from "../middleware/validate.js";
 import { publishIpRateLimit, publishWalletRateLimit } from "../middleware/rateLimiters.js";
-import { apiPaywall, checkPayerAccess, loadProxiedApi } from "../middleware/apiPaywall.js";
+import { ownershipVerifyRateLimit } from "../middleware/ownershipVerifyRateLimit.js";
+import {
+  apiPaywall,
+  checkPayerAccess,
+  checkPayerAllowDeny,
+  loadProxiedApi,
+} from "../middleware/apiPaywall.js";
 import { createIpRateLimiter } from "../middleware/rateLimit.js";
 import { getRateLimitStore } from "../lib/rateLimit/index.js";
 import {
@@ -48,9 +56,9 @@ import {
   type ApiRow,
 } from "../services/apiService.js";
 import { getApiCreditBalance, purchaseApiCredits } from "../services/apiCredits.js";
+import { listPayerEntitlements } from "../services/payerEntitlements.js";
 import { statsPagination } from "../services/apiStatsQuery.js";
 import { apiCreditPurchaseReference } from "../lib/apiCreditSignature.js";
-import { deliverChargedCallWebhook } from "../services/webhookService.js";
 import {
   confirmApiPrice,
   confirmApiRegistration,
@@ -58,7 +66,12 @@ import {
   prepareApiRegistration,
 } from "../services/apiOnchain.js";
 import { confirmCallRefund, prepareCallRefund } from "../services/apiRefunds.js";
-import { sendUpstream, streamUpstream, UpstreamError } from "../lib/upstreamClient.js";
+import {
+  sendUpstream,
+  streamUpstream,
+  UPSTREAM_ERROR_CODES,
+  UpstreamError,
+} from "../lib/upstreamClient.js";
 import { filterRequestHeaders, filterResponseHeaders } from "../lib/proxyHeaders.js";
 import { paymentHeader, paymentHeaderHash, payerFromPayment } from "../lib/payer.js";
 import {
@@ -66,10 +79,17 @@ import {
   type ProxyIdempotencyKey,
   type StoredProxyResponse,
 } from "../lib/idempotency.js";
-import { deliverChargedCallWebhook } from "../services/webhookService.js";
+import { chargedCallWebhookEntry } from "../services/webhookService.js";
 import { decryptSecret } from "../utils/secretBox.js";
 import { stroopsToUsdc, usdcToStroops } from "../utils/usdc.js";
 import { getLogger } from "../lib/logger.js";
+import { withSpan } from "../lib/spans.js";
+import {
+  gatewayChargedCalls,
+  gatewayCreditSpends,
+  gatewayProxiedCalls,
+  gatewayUpstreamDuration,
+} from "../lib/metrics.js";
 import { config, upstreamKeyRing } from "../config.js";
 import { ProxyBufferSemaphore, proxyBufferConcurrency } from "../middleware/proxyBuffer.js";
 import { importBulkOpenApi, previewBulkOpenApi } from "../services/openApiImport.js";
@@ -96,22 +116,34 @@ function sendServiceError(res: Response, err: unknown): void {
 // ── Management ────────────────────────────────────────────────────────────────
 
 // POST /apis/import/preview — validate and group an OpenAPI JSON/YAML document without writes.
-router.post("/apis/import/preview", apiKeyAuth, openApiUpload.single("document"), async (req, res) => {
-  const raw = req.file?.buffer.toString("utf8") ?? req.body?.document ?? req.body?.openapiSpec;
-  if (!raw) {
-    res.status(400).json({ error: "Provide document as JSON/YAML text, document, or openapiSpec" });
-    return;
-  }
-  const result = previewBulkOpenApi(raw);
-  res.status(result.errors.length > 0 ? 422 : 200).json({ groups: result.groups, errors: result.errors });
-});
+router.post(
+  "/apis/import/preview",
+  apiKeyAuth,
+  openApiUpload.single("document"),
+  async (req, res) => {
+    const raw = req.file?.buffer.toString("utf8") ?? req.body?.document ?? req.body?.openapiSpec;
+    if (!raw) {
+      res
+        .status(400)
+        .json({ error: "Provide document as JSON/YAML text, document, or openapiSpec" });
+      return;
+    }
+    const result = previewBulkOpenApi(raw);
+    res
+      .status(result.errors.length > 0 ? 422 : 200)
+      .json({ groups: result.groups, errors: result.errors });
+  },
+);
 
 // POST /apis/import — confirm selected preview groups and register them atomically.
 router.post("/apis/import", apiKeyAuth, openApiUpload.single("document"), async (req, res) => {
   const raw = req.file?.buffer.toString("utf8") ?? req.body?.document ?? req.body?.openapiSpec;
   const defaults = req.body?.defaults ?? req.body;
   if (!raw || typeof defaults?.price !== "string") {
-    res.status(400).json({ error: "document and defaults.price are required; walletAddress defaults to the publisher wallet" });
+    res.status(400).json({
+      error:
+        "document and defaults.price are required; walletAddress defaults to the publisher wallet",
+    });
     return;
   }
   const selected = Array.isArray(req.body?.groups) ? req.body.groups : undefined;
@@ -123,7 +155,9 @@ router.post("/apis/import", apiKeyAuth, openApiUpload.single("document"), async 
     });
     res.status(201).json(result);
   } catch (error) {
-    res.status(422).json({ error: error instanceof Error ? error.message : "OpenAPI import failed" });
+    res
+      .status(422)
+      .json({ error: error instanceof Error ? error.message : "OpenAPI import failed" });
   }
 });
 
@@ -236,15 +270,22 @@ router.delete("/apis/:id", apiKeyAuth, requestSignatureAuth, async (req, res) =>
   }
 });
 
-// POST /apis/:id/verify-ownership — check /.well-known/zentrixpay.txt, then list (owner)
-router.post("/apis/:id/verify-ownership", apiKeyAuth, requestSignatureAuth, async (req, res) => {
-  try {
-    const api = await getOwnedApi(req.params.id as string, req.publisher!.id);
-    res.json(toOwnerApi(await verifyOwnership(api)));
-  } catch (err) {
-    sendServiceError(res, err);
-  }
-});
+// POST /apis/:id/verify-ownership — check /.well-known/zentrixpay.txt, then list (owner).
+// Rate-limited per provider and per API: each call makes outbound HTTP/DNS requests (#289).
+router.post(
+  "/apis/:id/verify-ownership",
+  apiKeyAuth,
+  requestSignatureAuth,
+  ...ownershipVerifyRateLimit,
+  async (req, res) => {
+    try {
+      const api = await getOwnedApi(req.params.id as string, req.publisher!.id);
+      res.json(toOwnerApi(await verifyOwnership(api)));
+    } catch (err) {
+      sendServiceError(res, err);
+    }
+  },
+);
 
 // GET /apis/:id/stats?from=&to=&limit=&offset= — call counts, revenue and paged call
 // history for one window (owner; archived APIs included). `from` is inclusive and
@@ -277,6 +318,36 @@ router.get("/apis/:id/stats", apiKeyAuth, async (req, res) => {
   }
 });
 
+// GET /apis/:id/calls.csv?from&to — streamed CSV of the call history (owner only)
+router.get("/apis/:id/calls.csv", apiKeyAuth, async (req, res) => {
+  const query = apiStatsQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    res.status(400).json({ error: query.error.format() });
+    return;
+  }
+  let api;
+  try {
+    api = await getOwnedApi(req.params.id as string, req.publisher!.id, { includeArchived: true });
+  } catch (err) {
+    sendServiceError(res, err);
+    return;
+  }
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="api-${api.id}-calls.csv"`);
+  res.setHeader("Cache-Control", "no-store");
+  res.flushHeaders();
+  try {
+    await writeCallsCsv(res, api.id, { from: query.data.from, to: query.data.to });
+    res.end();
+  } catch (err) {
+    getLogger().error(
+      { event: "api_calls_export_failed", apiId: api.id, err },
+      "CSV export failed",
+    );
+    res.destroy(err instanceof Error ? err : undefined);
+  }
+});
+
 // GET /apis/:id/stats/time-series?days=7|30|90 — per-day calls and revenue (owner)
 router.get("/apis/:id/stats/time-series", apiKeyAuth, async (req, res) => {
   try {
@@ -290,13 +361,11 @@ router.get("/apis/:id/stats/time-series", apiKeyAuth, async (req, res) => {
   }
 });
 
-// GET /payers/:address/calls — receipts for the calls a wallet paid for (paged)
-router.get("/payers/:address/calls", async (req, res) => {
+// GET /payers/:address/calls — receipts for the calls a wallet paid for (paged).
+// Signed by that wallet (X-Wallet-Timestamp + X-Wallet-Signature): call
+// history is private to the payer.
+router.get("/payers/:address/calls", walletSignatureAuth, async (req, res) => {
   const address = req.params.address as string;
-  if (!/^G[A-Z2-7]{55}$/.test(address)) {
-    res.status(400).json({ error: "address must be a Stellar public key (G...)" });
-    return;
-  }
   const query = payerCallsQuerySchema.safeParse(req.query);
   if (!query.success) {
     res.status(400).json({ error: query.error.format() });
@@ -311,6 +380,14 @@ router.get("/payers/:address/calls", async (req, res) => {
     offset,
     nextOffset: hasMore ? offset + limit : null,
   });
+});
+
+// GET /payers/:address/entitlements — the wallet's active passes (API, expiry)
+// and prepaid credit balances per API. Signed by that wallet (#292).
+router.get("/payers/:address/entitlements", walletSignatureAuth, async (req, res) => {
+  const entitlements = await listPayerEntitlements(req.params.address as string);
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json(entitlements);
 });
 
 // ── Paid proxy ────────────────────────────────────────────────────────────────
@@ -405,31 +482,6 @@ export async function finishHandler(req: Request, res: Response) {
   }
 }
 
-/**
- * GET /apis/:id/stats
- * Returns aggregate stats plus recent calls including settlement_tx.
- */
-router.get("/:id/stats", async (req: Request, res: Response) => {
-  const apiId = req.params.id;
-  const sinceParam = req.query.since as string | undefined;
-  const since = sinceParam ? new Date(sinceParam) : undefined;
-
-  try {
-    const [api] = await db.select().from(apis).where(eq(apis.id, apiId)).limit(1);
-    if (!api) {
-      return res.status(404).json({ error: "API not found" });
-    }
-    const [totals, recentCalls] = await Promise.all([
-      getApiStats(api.id, { since }),
-      listRecentCalls(api.id, 50),
-    ]);
-    return res.json({ apiId: api.id, ...totals, recentCalls });
-  } catch (err) {
-    console.error("Failed to fetch API stats", err);
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
 const UPSTREAM_ERROR_STATUS = { blocked: 502, network: 502, too_large: 502, timeout: 504 } as const;
 
 /** Build and inject upstream secrets into headers/url, returning the secrets manifest. */
@@ -466,7 +518,7 @@ async function proxyHandler(req: Request, res: Response) {
   const segments = (req.params.path as unknown as string[] | undefined) ?? [];
   const target = buildUpstreamUrl(api.upstreamUrl, segments, req.originalUrl);
   if (!target) {
-    res.status(400).json({ error: "Invalid path" });
+    res.status(400).json({ error: "Invalid path", code: "invalid_path" });
     return;
   }
 
@@ -481,20 +533,40 @@ async function proxyHandler(req: Request, res: Response) {
   res.on("finish", () => {
     const settlement = settlementFrom(res);
     const charged = res.statusCode < 400;
+    gatewayProxiedCalls.inc({ status_class: `${Math.floor(res.statusCode / 100)}xx` });
+    gatewayChargedCalls.inc({ charged: String(charged) });
+    if (charged && res.locals.creditPayer) gatewayCreditSpends.inc();
     const callId = randomUUID();
+    const payerAddress =
+      (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement);
+    const amount = (res.locals.apiCallPrice as string | undefined) ?? api.price;
+    // Stored minimized: identifiers and the query string are dropped (#144).
+    const path = minimizeCallPath(
+      target.pathname.slice(new URL(api.upstreamUrl).pathname.replace(/\/+$/, "").length) || "/",
+    );
+    const durationMs = Date.now() - started;
     recordApiCall({
       callId,
       apiId: api.id,
       charged,
-      payerAddress: (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement),
-      amount: (res.locals.apiCallPrice as string | undefined) ?? api.price,
+      payerAddress,
+      amount,
       method: req.method,
-      // Stored minimized: identifiers and the query string are dropped (#144).
-      path: minimizeCallPath(
-        target.pathname.slice(new URL(api.upstreamUrl).pathname.replace(/\/+$/, "").length) || "/",
-      ),
+      path,
       responseStatus: res.statusCode,
-      durationMs: Date.now() - started,
+      durationMs,
+      // Charged-call webhook goes to the outbox in the same transaction (#208).
+      webhook: charged
+        ? chargedCallWebhookEntry(api, {
+            callId,
+            payerAddress,
+            amount,
+            method: req.method,
+            path,
+            responseStatus: res.statusCode,
+            durationMs,
+          })
+        : undefined,
     }).catch((err) =>
       // Only reached when the recovery spool itself could not be written (#134).
       getLogger().error(
@@ -536,7 +608,11 @@ async function proxyHandler(req: Request, res: Response) {
         );
         res
           .status(UPSTREAM_ERROR_STATUS[err.kind])
-          .json({ error: "upstream_failed", reason: err.kind });
+          .json({
+            error: "upstream_failed",
+            reason: err.kind,
+            code: UPSTREAM_ERROR_CODES[err.kind],
+          });
         return;
       }
       throw err;
@@ -576,9 +652,14 @@ async function proxyHandler(req: Request, res: Response) {
 
   // ── Buffered path (default) ─────────────────────────────────────────────────
   let upstream;
+  const upstreamStarted = performance.now();
   try {
-    upstream = await sendUpstream(upstreamOpts);
+    upstream = await withSpan("upstream.call", { "zentrixpay.api.id": api.id }, () =>
+      sendUpstream(upstreamOpts),
+    );
+    gatewayUpstreamDuration.observe((performance.now() - upstreamStarted) / 1000);
   } catch (err) {
+    gatewayUpstreamDuration.observe((performance.now() - upstreamStarted) / 1000);
     if (err instanceof UpstreamError) {
       getLogger().warn(
         { event: "api_upstream_failed", apiId: api.id, kind: err.kind, error: err.message },
@@ -586,7 +667,7 @@ async function proxyHandler(req: Request, res: Response) {
       );
       res
         .status(UPSTREAM_ERROR_STATUS[err.kind])
-        .json({ error: "upstream_failed", reason: err.kind });
+        .json({ error: "upstream_failed", reason: err.kind, code: UPSTREAM_ERROR_CODES[err.kind] });
       return;
     }
     throw err;
@@ -856,6 +937,7 @@ router.all(
   proxyBufferLimit,
   loadProxiedApi,
   express.raw({ type: () => true, limit: config.PROXY_MAX_REQUEST_BODY }),
+  checkPayerAllowDeny,
   checkPayerAccess,
   proxyIdempotency,
   spendSignedApiCredit,
