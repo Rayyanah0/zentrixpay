@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - master
+  # Run the same required checks on the merge queue's temporary branch, so
+  # each PR is tested on top of the PRs queued ahead of it (#186).
+  merge_group:
 
 jobs:
   node-ci:
