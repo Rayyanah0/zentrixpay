@@ -55,7 +55,6 @@ import {
 import { getApiCreditBalance, purchaseApiCredits } from "../services/apiCredits.js";
 import { statsPagination } from "../services/apiStatsQuery.js";
 import { apiCreditPurchaseReference } from "../lib/apiCreditSignature.js";
-import { deliverChargedCallWebhook } from "../services/webhookService.js";
 import {
   confirmApiPrice,
   confirmApiRegistration,
@@ -71,7 +70,7 @@ import {
   type ProxyIdempotencyKey,
   type StoredProxyResponse,
 } from "../lib/idempotency.js";
-import { deliverChargedCallWebhook } from "../services/webhookService.js";
+import { chargedCallWebhookEntry } from "../services/webhookService.js";
 import { decryptSecret } from "../utils/secretBox.js";
 import { stroopsToUsdc, usdcToStroops } from "../utils/usdc.js";
 import { getLogger } from "../lib/logger.js";
@@ -501,19 +500,36 @@ async function proxyHandler(req: Request, res: Response) {
     const settlement = settlementFrom(res);
     const charged = res.statusCode < 400;
     const callId = randomUUID();
+    const payerAddress =
+      (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement);
+    const amount = (res.locals.apiCallPrice as string | undefined) ?? api.price;
+    // Stored minimized: identifiers and the query string are dropped (#144).
+    const path = minimizeCallPath(
+      target.pathname.slice(new URL(api.upstreamUrl).pathname.replace(/\/+$/, "").length) || "/",
+    );
+    const durationMs = Date.now() - started;
     recordApiCall({
       callId,
       apiId: api.id,
       charged,
-      payerAddress: (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement),
-      amount: (res.locals.apiCallPrice as string | undefined) ?? api.price,
+      payerAddress,
+      amount,
       method: req.method,
-      // Stored minimized: identifiers and the query string are dropped (#144).
-      path: minimizeCallPath(
-        target.pathname.slice(new URL(api.upstreamUrl).pathname.replace(/\/+$/, "").length) || "/",
-      ),
+      path,
       responseStatus: res.statusCode,
-      durationMs: Date.now() - started,
+      durationMs,
+      // Charged-call webhook goes to the outbox in the same transaction (#208).
+      webhook: charged
+        ? chargedCallWebhookEntry(api, {
+            callId,
+            payerAddress,
+            amount,
+            method: req.method,
+            path,
+            responseStatus: res.statusCode,
+            durationMs,
+          })
+        : undefined,
     }).catch((err) =>
       // Only reached when the recovery spool itself could not be written (#134).
       getLogger().error(

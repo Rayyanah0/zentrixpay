@@ -53,7 +53,8 @@ export function payerFromPayment(header: string | undefined): PaymentPayer {
   const txXdr = decoded?.payload?.transaction;
   if (typeof txXdr !== "string") {
     // Not a Stellar payload; fall back to the legacy shapes (never signed).
-    return { address: parsePayerFromXPayment(header).payer, signed: false };
+    const { payer } = parsePayerFromXPayment(header);
+    return { address: payer, signed: false };
   }
 
   try {

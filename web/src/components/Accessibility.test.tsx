@@ -13,6 +13,7 @@ import { TryItModal } from "./TryItModal.js";
 import { ProviderDashboard } from "./ProviderDashboard.js";
 import type { PublicApi, OwnerApi } from "../api/apis.js";
 import type { WalletState } from "../hooks/useWalletConnection.js";
+import { makeOwnerApi, makePublicApi } from "../test/fixtures.js";
 
 expect.extend(toHaveNoViolations);
 
@@ -40,43 +41,16 @@ vi.mock("../lib/x402Call.js", () => ({
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-const sampleApi: PublicApi = {
-  id: "api1",
-  name: "Weather API",
-  description: "Forecasts for any city",
-  price: "0.01",
-  priceRules: [],
-  currency: "USDC",
-  walletAddress: "GPROVIDER",
-  allowedMethods: ["GET", "POST"],
-  tags: ["weather"],
-  healthy: true,
-  proxyUrl: "http://gw.test/api/api1",
-  openapiUrl: null,
-  onchain: { registered: false, contractId: "", txHash: null },
-  createdAt: "2026-10-01T00:00:00Z",
-};
+const sampleApi: PublicApi = makePublicApi();
 
-const ownedApi: OwnerApi = {
-  ...sampleApi,
-  upstreamUrl: "https://api.example.com/v1",
-  upstreamHeaderName: null,
-  hasUpstreamSecret: false,
-  timeoutMs: null,
-  listed: true,
-  ownershipVerified: true,
-  ownershipVerification: {
-    url: "https://api.example.com/.well-known/zentrixpay.txt",
-    expectedContent: "zentrixpay-verification=abc",
-  },
-};
+const ownedApi: OwnerApi = makeOwnerApi({ listed: true, ownershipVerified: true });
 
 const disconnectedWallet: WalletState = {
   status: "disconnected",
   address: null,
+  error: null,
   connect: vi.fn(),
   disconnect: vi.fn(),
-  network: null,
 };
 
 /** Apply or remove the dark class on the document root. */

@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { Router } from "express";
 import { and, eq, gt, sql } from "drizzle-orm";
-import { db } from "../db/index.js";
+import { db } from "../db/client.js";
 import { apiCalls, apis as apiTable, apiPasses } from "../db/schema.js";
 import type { ApiRow } from "../db/schema.js";
 import { config } from "../config.js";
