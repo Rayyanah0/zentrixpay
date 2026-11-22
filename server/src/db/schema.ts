@@ -90,6 +90,13 @@ export const apis = pgTable(
     passPrice: text("pass_price"),
     // Issue #32: free calls a new wallet may make per day before the paywall kicks in (0 = disabled).
     freeCallsPerDay: integer("free_calls_per_day").notNull().default(0),
+    // On-chain anchoring (migrations 0010_api_gateway_extensions.sql).
+    onchainStatus: onchainStatusEnum("onchain_status").notNull().default("none"),
+    onchainTxHash: text("onchain_tx_hash"),
+    // Streaming proxy support (migration 0011_streaming_enabled.sql).
+    streamingEnabled: boolean("streaming_enabled").notNull().default(false),
+    // Per-API network override (falls back to server config.NETWORK when null).
+    network: text("network"),
     // Soft delete: archived APIs are hidden everywhere but keep their call history.
     archivedAt: timestamp("archived_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -173,12 +180,19 @@ export const apiCalls = pgTable(
     amount: text("amount"),
     asset: text("asset"),
     payer: text("payer"),
+    payerAddress: text("payer_address"),
     txHash: text("tx_hash"),
     settlementTx: text("settlement_tx"),
     latencyMs: integer("latency_ms"),
+    durationMs: integer("duration_ms"),
     requestHeaders: jsonb("request_headers"),
     responseHeaders: jsonb("response_headers"),
     error: text("error"),
+    // Refund fields (migration 0010_api_gateway_extensions.sql).
+    refundStatus: text("refund_status").$type<"pending" | "refunded" | null>(),
+    refundAmount: text("refund_amount"),
+    refundTxHash: text("refund_tx_hash"),
+    refundedAt: timestamp("refunded_at"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
@@ -186,6 +200,33 @@ export const apiCalls = pgTable(
     createdAtIdx: index("api_calls_created_at_idx").on(table.createdAt),
     chargedIdx: index("api_calls_charged_idx").on(table.charged),
     settlementTxIdx: index("api_calls_settlement_tx_idx").on(table.settlementTx),
+  }),
+);
+
+// Webhook outbox (#208). A charged-call event is written here in the same
+// transaction as its api_calls row, and a worker delivers it with backoff. The
+// signing secret stays encrypted (secret_enc), as on apis.
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: serial("id").primaryKey(),
+    eventId: text("event_id").notNull(),
+    apiId: integer("api_id")
+      .notNull()
+      .references(() => apis.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    secretEnc: text("secret_enc").notNull(),
+    body: text("body").notNull(),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    lastError: text("last_error"),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    eventIdIdx: uniqueIndex("webhook_deliveries_event_id_idx").on(table.eventId),
+    dueIdx: index("webhook_deliveries_due_idx").on(table.status, table.nextAttemptAt),
   }),
 );
 
@@ -254,3 +295,6 @@ export const proxyIdempotency = pgTable(
 );
 
 export type ApiPassRow = typeof apiPasses.$inferSelect;
+
+/** Row type for the `apis` table, shared across middleware and services. */
+export type ApiRow = typeof apis.$inferSelect;
