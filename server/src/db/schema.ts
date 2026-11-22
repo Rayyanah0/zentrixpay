@@ -90,6 +90,13 @@ export const apis = pgTable(
     passPrice: text("pass_price"),
     // Issue #32: free calls a new wallet may make per day before the paywall kicks in (0 = disabled).
     freeCallsPerDay: integer("free_calls_per_day").notNull().default(0),
+    // On-chain anchoring (migrations 0010_api_gateway_extensions.sql).
+    onchainStatus: onchainStatusEnum("onchain_status").notNull().default("none"),
+    onchainTxHash: text("onchain_tx_hash"),
+    // Streaming proxy support (migration 0011_streaming_enabled.sql).
+    streamingEnabled: boolean("streaming_enabled").notNull().default(false),
+    // Per-API network override (falls back to server config.NETWORK when null).
+    network: text("network"),
     // Soft delete: archived APIs are hidden everywhere but keep their call history.
     archivedAt: timestamp("archived_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -173,12 +180,19 @@ export const apiCalls = pgTable(
     amount: text("amount"),
     asset: text("asset"),
     payer: text("payer"),
+    payerAddress: text("payer_address"),
     txHash: text("tx_hash"),
     settlementTx: text("settlement_tx"),
     latencyMs: integer("latency_ms"),
+    durationMs: integer("duration_ms"),
     requestHeaders: jsonb("request_headers"),
     responseHeaders: jsonb("response_headers"),
     error: text("error"),
+    // Refund fields (migration 0010_api_gateway_extensions.sql).
+    refundStatus: text("refund_status").$type<"pending" | "refunded" | null>(),
+    refundAmount: text("refund_amount"),
+    refundTxHash: text("refund_tx_hash"),
+    refundedAt: timestamp("refunded_at"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
