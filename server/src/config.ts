@@ -143,6 +143,9 @@ const envSchema = z.object({
   HEALTH_CHECK_INTERVAL_MS: z.coerce.number().int().min(0).default(60_000),
   HEALTH_CHECK_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
   HEALTH_CHECK_FAILURE_THRESHOLD: z.coerce.number().int().min(1).default(3),
+  // Persistently failing APIs are re-checked with exponential backoff (#220),
+  // capped at this delay. Set to 0 to disable backoff.
+  HEALTH_CHECK_MAX_BACKOFF_MS: z.coerce.number().int().min(0).default(3_600_000),
 
   // Background workers (health checks, retention, recovery, webhook delivery)
   // start only when this is true. Set false on API-only instances (#207).

@@ -1,3 +1,4 @@
+import { withSpan } from "../lib/spans.js";
 import type { NextFunction, Request, Response } from "express";
 import { Router } from "express";
 import { and, eq, gt, sql } from "drizzle-orm";
@@ -322,7 +323,9 @@ export async function loadProxiedApi(req: Request, res: Response, next: NextFunc
     return res.status(404).json({ error: "API not found" });
   }
 
-  const rows = await db.select().from(apis).where(eq(apis.id, apiId)).limit(1);
+  const rows = await withSpan("paywall.lookup", { "zentrixpay.api.id": apiId }, () =>
+    db.select().from(apis).where(eq(apis.id, apiId)).limit(1),
+  );
   const api = rows[0];
 
   if (!api || !api.listed) {

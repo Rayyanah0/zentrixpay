@@ -2,6 +2,7 @@ import { config, upstreamKeyRing } from "../config.js";
 import { pgClient } from "../db/client.js";
 import { runWithAdvisoryLock, WORKER_LOCK_KEYS } from "../lib/workerLock.js";
 import { logger } from "../lib/logger.js";
+import { isHealthCheckDue } from "../lib/healthBackoff.js";
 import { sendUpstream } from "../lib/upstreamClient.js";
 import { decryptSecret } from "../utils/secretBox.js";
 import {
@@ -107,7 +108,17 @@ async function tick(): Promise<void> {
 
 async function runHealthChecks(): Promise<void> {
   try {
-    const queue = await listApisForHealthCheck();
+    // Persistently failing APIs are skipped until their backoff window passes (#220).
+    const now = new Date();
+    const queue = (await listApisForHealthCheck()).filter((api) =>
+      isHealthCheckDue(
+        api,
+        now,
+        config.HEALTH_CHECK_INTERVAL_MS,
+        config.HEALTH_CHECK_FAILURE_THRESHOLD,
+        config.HEALTH_CHECK_MAX_BACKOFF_MS,
+      ),
+    );
     const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
       for (let api = queue.shift(); api; api = queue.shift()) {
         await checkOne(api).catch((err) =>

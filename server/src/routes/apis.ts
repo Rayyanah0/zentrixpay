@@ -75,6 +75,13 @@ import { chargedCallWebhookEntry } from "../services/webhookService.js";
 import { decryptSecret } from "../utils/secretBox.js";
 import { stroopsToUsdc, usdcToStroops } from "../utils/usdc.js";
 import { getLogger } from "../lib/logger.js";
+import { withSpan } from "../lib/spans.js";
+import {
+  gatewayChargedCalls,
+  gatewayCreditSpends,
+  gatewayProxiedCalls,
+  gatewayUpstreamDuration,
+} from "../lib/metrics.js";
 import { config, upstreamKeyRing } from "../config.js";
 import { ProxyBufferSemaphore, proxyBufferConcurrency } from "../middleware/proxyBuffer.js";
 import { importBulkOpenApi, previewBulkOpenApi } from "../services/openApiImport.js";
@@ -527,6 +534,9 @@ async function proxyHandler(req: Request, res: Response) {
   res.on("finish", () => {
     const settlement = settlementFrom(res);
     const charged = res.statusCode < 400;
+    gatewayProxiedCalls.inc({ status_class: `${Math.floor(res.statusCode / 100)}xx` });
+    gatewayChargedCalls.inc({ charged: String(charged) });
+    if (charged && res.locals.creditPayer) gatewayCreditSpends.inc();
     const callId = randomUUID();
     const payerAddress =
       (res.locals.creditPayer as string | undefined) ?? payerFrom(req, settlement);
@@ -639,9 +649,14 @@ async function proxyHandler(req: Request, res: Response) {
 
   // ── Buffered path (default) ─────────────────────────────────────────────────
   let upstream;
+  const upstreamStarted = performance.now();
   try {
-    upstream = await sendUpstream(upstreamOpts);
+    upstream = await withSpan("upstream.call", { "zentrixpay.api.id": api.id }, () =>
+      sendUpstream(upstreamOpts),
+    );
+    gatewayUpstreamDuration.observe((performance.now() - upstreamStarted) / 1000);
   } catch (err) {
+    gatewayUpstreamDuration.observe((performance.now() - upstreamStarted) / 1000);
     if (err instanceof UpstreamError) {
       getLogger().warn(
         { event: "api_upstream_failed", apiId: api.id, kind: err.kind, error: err.message },

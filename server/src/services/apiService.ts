@@ -14,6 +14,7 @@ import {
   type ApiCallRecorder,
 } from "./apiCallRecorder.js";
 import { apiCallRecordsPending } from "../lib/metrics.js";
+import { nextHealthCheckAt } from "../lib/healthBackoff.js";
 import { logger as rootLogger } from "../lib/logger.js";
 
 export { statsWhere, type RecentCallsOptions, type StatsRange } from "./apiStatsQuery.js";
@@ -130,6 +131,15 @@ export function toOwnerApi(api: ApiRow) {
       url: ownershipFileUrl(api.upstreamUrl),
       expectedContent: ownershipLine(api.ownershipToken),
     },
+    // When the health worker next checks this API (#220). Null when there is no health path or it was never checked.
+    nextHealthCheckAt: api.healthPath
+      ? (nextHealthCheckAt(
+          api,
+          config.HEALTH_CHECK_INTERVAL_MS,
+          config.HEALTH_CHECK_FAILURE_THRESHOLD,
+          config.HEALTH_CHECK_MAX_BACKOFF_MS,
+        )?.toISOString() ?? null)
+      : null,
   };
 }
 
