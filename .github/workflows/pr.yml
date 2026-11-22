@@ -9,6 +9,9 @@ on:
   # each PR is tested on top of the PRs queued ahead of it (#186).
   merge_group:
 
+permissions:
+  contents: read
+
 jobs:
   node-ci:
     name: Typecheck, build, lint, and tests
