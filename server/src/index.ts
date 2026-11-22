@@ -12,6 +12,7 @@ import { beginShutdown, whenDrained, inFlightCount } from "./lib/lifecycle.js";
 import { pgClient } from "./db/client.js";
 import { startPoolMetrics, stopPoolMetrics } from "./db/client.js";
 import { startHealthCheckWorker, stopHealthCheckWorker } from "./workers/healthCheckWorker.js";
+import { startPriceChangeWorker, stopPriceChangeWorker } from "./workers/priceChangeWorker.js";
 import {
   startWebhookDeliveryWorker,
   stopWebhookDeliveryWorker,
@@ -43,6 +44,7 @@ const server: Server = app.listen(config.PORT, () => {
 
   if (config.RUN_BACKGROUND_WORKERS) {
     startHealthCheckWorker();
+    startPriceChangeWorker();
     startApiCallRetentionWorker();
     startApiCallRecoveryWorker();
     startWebhookDeliveryWorker();
@@ -62,6 +64,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   shuttingDown = true;
 
   stopHealthCheckWorker();
+  stopPriceChangeWorker();
   stopApiCallRetentionWorker();
   stopApiCallRecoveryWorker();
   stopWebhookDeliveryWorker();
