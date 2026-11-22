@@ -95,7 +95,9 @@ describe("assertMainnetMutationAllowed", () => {
   });
 
   it("no-ops for read-only tools on mainnet", () => {
-    expect(() => assertMainnetMutationAllowed("mainnet", "zentrixpay_browse", {}, {})).not.toThrow();
+    expect(() =>
+      assertMainnetMutationAllowed("mainnet", "zentrixpay_browse", {}, {}),
+    ).not.toThrow();
   });
 
   it("blocks gated tools on mainnet without confirm", () => {

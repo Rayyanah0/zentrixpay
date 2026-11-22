@@ -62,13 +62,7 @@ import { TOOL_DEFINITIONS } from "./tools.js";
  *   - An empty array (`[]`) is valid and clears all tags from the resource.
  */
 export type ArgumentKind =
-  | "string"
-  | "enum"
-  | "flag"
-  | "hash"
-  | "tag_array"
-  | "string_array"
-  | "integer";
+  "string" | "enum" | "flag" | "hash" | "tag_array" | "string_array" | "integer";
 
 export interface ArgumentSpec {
   kind: ArgumentKind;

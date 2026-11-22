@@ -1,6 +1,6 @@
-import { Pool } from 'pg';
-import { GenericContainer, StartedTestContainer } from 'testcontainers';
-import { ApiService } from './apiService';
+import { Pool } from "pg";
+import { GenericContainer, StartedTestContainer } from "testcontainers";
+import { ApiService } from "./apiService";
 
 /**
  * Integration tests for ApiService against a real Postgres database.
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS api_calls (
 );
 `;
 
-describe('ApiService integration (real Postgres)', () => {
+describe("ApiService integration (real Postgres)", () => {
   let container: StartedTestContainer | undefined;
   let pool: Pool;
   let service: ApiService;
@@ -52,11 +52,11 @@ describe('ApiService integration (real Postgres)', () => {
       pool = new Pool({ connectionString: externalDatabaseUrl });
     } else {
       // Testcontainers path.
-      container = await new GenericContainer('postgres:16-alpine')
+      container = await new GenericContainer("postgres:16-alpine")
         .withEnvironment({
-          POSTGRES_USER: 'test',
-          POSTGRES_PASSWORD: 'test',
-          POSTGRES_DB: 'test',
+          POSTGRES_USER: "test",
+          POSTGRES_PASSWORD: "test",
+          POSTGRES_DB: "test",
         })
         .withExposedPorts(5432)
         .withStartupTimeout(120_000)
@@ -65,9 +65,9 @@ describe('ApiService integration (real Postgres)', () => {
       pool = new Pool({
         host: container.getHost(),
         port: container.getMappedPort(5432),
-        user: 'test',
-        password: 'test',
-        database: 'test',
+        user: "test",
+        password: "test",
+        database: "test",
       });
     }
 
@@ -76,7 +76,7 @@ describe('ApiService integration (real Postgres)', () => {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       try {
-        await pool.query('SELECT 1');
+        await pool.query("SELECT 1");
         break;
       } catch (err) {
         if (Date.now() > deadline) {
@@ -100,23 +100,25 @@ describe('ApiService integration (real Postgres)', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE api_calls, apis RESTART IDENTITY CASCADE');
+    await pool.query("TRUNCATE api_calls, apis RESTART IDENTITY CASCADE");
   });
 
-  async function insertApi(overrides: Partial<{
-    name: string;
-    description: string | null;
-    origin: string;
-    owner: string | null;
-    price: number;
-    listed: boolean;
-    ownershipVerifiedAt: Date | null;
-  }> = {}): Promise<number> {
+  async function insertApi(
+    overrides: Partial<{
+      name: string;
+      description: string | null;
+      origin: string;
+      owner: string | null;
+      price: number;
+      listed: boolean;
+      ownershipVerifiedAt: Date | null;
+    }> = {},
+  ): Promise<number> {
     const {
-      name = 'Test API',
-      description = 'A test API',
-      origin = 'https://example.com',
-      owner = 'alice',
+      name = "Test API",
+      description = "A test API",
+      origin = "https://example.com",
+      owner = "alice",
       price = 0,
       listed = false,
       ownershipVerifiedAt = null,
@@ -131,17 +133,19 @@ describe('ApiService integration (real Postgres)', () => {
     return result.rows[0].id as number;
   }
 
-  async function insertCall(overrides: Partial<{
-    apiId: number;
-    payer: string | null;
-    charged: boolean;
-    amount: number;
-    durationMs: number;
-    createdAt: Date;
-  }> = {}): Promise<void> {
+  async function insertCall(
+    overrides: Partial<{
+      apiId: number;
+      payer: string | null;
+      charged: boolean;
+      amount: number;
+      durationMs: number;
+      createdAt: Date;
+    }> = {},
+  ): Promise<void> {
     const {
       apiId,
-      payer = 'payer-1',
+      payer = "payer-1",
       charged = false,
       amount = 0,
       durationMs = 100,
@@ -155,67 +159,67 @@ describe('ApiService integration (real Postgres)', () => {
     );
   }
 
-  describe('catalog search escaping', () => {
-    it('treats % as a literal character, not a wildcard', async () => {
-      await insertApi({ name: 'Discount 50% off', listed: true });
-      await insertApi({ name: 'Plain name', listed: true });
+  describe("catalog search escaping", () => {
+    it("treats % as a literal character, not a wildcard", async () => {
+      await insertApi({ name: "Discount 50% off", listed: true });
+      await insertApi({ name: "Plain name", listed: true });
 
-      const results = await service.searchApis({ q: '50%' });
+      const results = await service.searchApis({ q: "50%" });
 
-      expect(results.map((r) => r.name)).toEqual(['Discount 50% off']);
+      expect(results.map((r) => r.name)).toEqual(["Discount 50% off"]);
     });
 
-    it('treats _ as a literal character, not a single-char wildcard', async () => {
-      await insertApi({ name: 'snake_case api', listed: true });
-      await insertApi({ name: 'snakeXcase api', listed: true });
+    it("treats _ as a literal character, not a single-char wildcard", async () => {
+      await insertApi({ name: "snake_case api", listed: true });
+      await insertApi({ name: "snakeXcase api", listed: true });
 
-      const results = await service.searchApis({ q: 'snake_case' });
+      const results = await service.searchApis({ q: "snake_case" });
 
-      expect(results.map((r) => r.name)).toEqual(['snake_case api']);
+      expect(results.map((r) => r.name)).toEqual(["snake_case api"]);
     });
 
-    it('treats backslash as a literal character', async () => {
-      await insertApi({ name: 'path\\to\\api', listed: true });
-      await insertApi({ name: 'path to api', listed: true });
+    it("treats backslash as a literal character", async () => {
+      await insertApi({ name: "path\\to\\api", listed: true });
+      await insertApi({ name: "path to api", listed: true });
 
-      const results = await service.searchApis({ q: 'path\\to' });
+      const results = await service.searchApis({ q: "path\\to" });
 
-      expect(results.map((r) => r.name)).toEqual(['path\\to\\api']);
+      expect(results.map((r) => r.name)).toEqual(["path\\to\\api"]);
     });
 
-    it('does not error on a lone backslash', async () => {
-      await insertApi({ name: 'trailing\\', listed: true });
+    it("does not error on a lone backslash", async () => {
+      await insertApi({ name: "trailing\\", listed: true });
 
-      const results = await service.searchApis({ q: '\\' });
+      const results = await service.searchApis({ q: "\\" });
 
-      expect(results.map((r) => r.name)).toEqual(['trailing\\']);
+      expect(results.map((r) => r.name)).toEqual(["trailing\\"]);
     });
 
-    it('matches case-insensitively on plain terms', async () => {
-      await insertApi({ name: 'Weather API', listed: true });
-      await insertApi({ name: 'Other API', listed: true });
+    it("matches case-insensitively on plain terms", async () => {
+      await insertApi({ name: "Weather API", listed: true });
+      await insertApi({ name: "Other API", listed: true });
 
-      const results = await service.searchApis({ q: 'weather' });
+      const results = await service.searchApis({ q: "weather" });
 
-      expect(results.map((r) => r.name)).toEqual(['Weather API']);
+      expect(results.map((r) => r.name)).toEqual(["Weather API"]);
     });
 
-    it('only returns listed APIs in catalog search', async () => {
-      await insertApi({ name: 'Listed Weather', listed: true });
-      await insertApi({ name: 'Unlisted Weather', listed: false });
+    it("only returns listed APIs in catalog search", async () => {
+      await insertApi({ name: "Listed Weather", listed: true });
+      await insertApi({ name: "Unlisted Weather", listed: false });
 
-      const results = await service.searchApis({ q: 'Weather' });
+      const results = await service.searchApis({ q: "Weather" });
 
-      expect(results.map((r) => r.name)).toEqual(['Listed Weather']);
+      expect(results.map((r) => r.name)).toEqual(["Listed Weather"]);
     });
   });
 
-  describe('getApiStats filters and aggregates', () => {
-    it('sums revenue only over charged calls', async () => {
-      const apiId = await insertApi({ owner: 'alice' });
-      await insertCall({ apiId, charged: true, amount: 1.5, payer: 'p1' });
-      await insertCall({ apiId, charged: true, amount: 2.25, payer: 'p2' });
-      await insertCall({ apiId, charged: false, amount: 99, payer: 'p3' });
+  describe("getApiStats filters and aggregates", () => {
+    it("sums revenue only over charged calls", async () => {
+      const apiId = await insertApi({ owner: "alice" });
+      await insertCall({ apiId, charged: true, amount: 1.5, payer: "p1" });
+      await insertCall({ apiId, charged: true, amount: 2.25, payer: "p2" });
+      await insertCall({ apiId, charged: false, amount: 99, payer: "p3" });
 
       const stats = await service.getApiStats(apiId);
 
@@ -224,11 +228,11 @@ describe('ApiService integration (real Postgres)', () => {
       expect(Number(stats.revenue)).toBeCloseTo(3.75, 8);
     });
 
-    it('counts unique payers across all calls', async () => {
-      const apiId = await insertApi({ owner: 'alice' });
-      await insertCall({ apiId, payer: 'p1', charged: true, amount: 1 });
-      await insertCall({ apiId, payer: 'p1', charged: true, amount: 1 });
-      await insertCall({ apiId, payer: 'p2', charged: false });
+    it("counts unique payers across all calls", async () => {
+      const apiId = await insertApi({ owner: "alice" });
+      await insertCall({ apiId, payer: "p1", charged: true, amount: 1 });
+      await insertCall({ apiId, payer: "p1", charged: true, amount: 1 });
+      await insertCall({ apiId, payer: "p2", charged: false });
       await insertCall({ apiId, payer: null, charged: false });
 
       const stats = await service.getApiStats(apiId);
@@ -236,8 +240,8 @@ describe('ApiService integration (real Postgres)', () => {
       expect(stats.uniquePayers).toBe(2);
     });
 
-    it('computes average duration over all calls', async () => {
-      const apiId = await insertApi({ owner: 'alice' });
+    it("computes average duration over all calls", async () => {
+      const apiId = await insertApi({ owner: "alice" });
       await insertCall({ apiId, durationMs: 100 });
       await insertCall({ apiId, durationMs: 200 });
       await insertCall({ apiId, durationMs: 300 });
@@ -247,8 +251,8 @@ describe('ApiService integration (real Postgres)', () => {
       expect(Number(stats.avgDurationMs)).toBeCloseTo(200, 5);
     });
 
-    it('filters by since date', async () => {
-      const apiId = await insertApi({ owner: 'alice' });
+    it("filters by since date", async () => {
+      const apiId = await insertApi({ owner: "alice" });
       const old = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
       const recent = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000);
 
@@ -263,8 +267,8 @@ describe('ApiService integration (real Postgres)', () => {
       expect(Number(stats.revenue)).toBeCloseTo(7, 8);
     });
 
-    it('returns zeroed stats for an API with no calls', async () => {
-      const apiId = await insertApi({ owner: 'alice' });
+    it("returns zeroed stats for an API with no calls", async () => {
+      const apiId = await insertApi({ owner: "alice" });
 
       const stats = await service.getApiStats(apiId);
 
@@ -276,50 +280,49 @@ describe('ApiService integration (real Postgres)', () => {
     });
   });
 
-  describe('listing rules on upstream change', () => {
-    it('resets ownershipVerifiedAt and listed=false when origin changes', async () => {
+  describe("listing rules on upstream change", () => {
+    it("resets ownershipVerifiedAt and listed=false when origin changes", async () => {
       const apiId = await insertApi({
-        owner: 'alice',
-        origin: 'https://old.example.com',
+        owner: "alice",
+        origin: "https://old.example.com",
         listed: true,
         ownershipVerifiedAt: new Date(),
       });
 
-      await service.updateApi(apiId, { origin: 'https://new.example.com' });
+      await service.updateApi(apiId, { origin: "https://new.example.com" });
 
       const row = await pool.query(
-        'SELECT origin, listed, ownership_verified_at FROM apis WHERE id = $1',
+        "SELECT origin, listed, ownership_verified_at FROM apis WHERE id = $1",
         [apiId],
       );
 
-      expect(row.rows[0].origin).toBe('https://new.example.com');
+      expect(row.rows[0].origin).toBe("https://new.example.com");
       expect(row.rows[0].listed).toBe(false);
       expect(row.rows[0].ownership_verified_at).toBeNull();
     });
 
-    it('keeps verification and listing when origin is unchanged', async () => {
+    it("keeps verification and listing when origin is unchanged", async () => {
       const verifiedAt = new Date();
       const apiId = await insertApi({
-        owner: 'alice',
-        origin: 'https://same.example.com',
+        owner: "alice",
+        origin: "https://same.example.com",
         listed: true,
         ownershipVerifiedAt: verifiedAt,
       });
 
-      await service.updateApi(apiId, { description: 'updated' });
+      await service.updateApi(apiId, { description: "updated" });
 
-      const row = await pool.query(
-        'SELECT listed, ownership_verified_at FROM apis WHERE id = $1',
-        [apiId],
-      );
+      const row = await pool.query("SELECT listed, ownership_verified_at FROM apis WHERE id = $1", [
+        apiId,
+      ]);
 
       expect(row.rows[0].listed).toBe(true);
       expect(row.rows[0].ownership_verified_at).not.toBeNull();
     });
 
-    it('throws 409 when listing without ownership verification', async () => {
+    it("throws 409 when listing without ownership verification", async () => {
       const apiId = await insertApi({
-        owner: 'alice',
+        owner: "alice",
         listed: false,
         ownershipVerifiedAt: null,
       });
@@ -328,20 +331,20 @@ describe('ApiService integration (real Postgres)', () => {
         status: 409,
       });
 
-      const row = await pool.query('SELECT listed FROM apis WHERE id = $1', [apiId]);
+      const row = await pool.query("SELECT listed FROM apis WHERE id = $1", [apiId]);
       expect(row.rows[0].listed).toBe(false);
     });
 
-    it('allows listing when ownership is verified', async () => {
+    it("allows listing when ownership is verified", async () => {
       const apiId = await insertApi({
-        owner: 'alice',
+        owner: "alice",
         listed: false,
         ownershipVerifiedAt: new Date(),
       });
 
       await service.updateApi(apiId, { listed: true });
 
-      const row = await pool.query('SELECT listed FROM apis WHERE id = $1', [apiId]);
+      const row = await pool.query("SELECT listed FROM apis WHERE id = $1", [apiId]);
       expect(row.rows[0].listed).toBe(true);
     });
   });

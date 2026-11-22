@@ -344,7 +344,9 @@ export function toOtlpMetricsExport(snapshot: MetricsSnapshot): OtlpMetricsPaylo
             attributeOf("zentrixpay.metrics.since", snapshot.since ?? ""),
           ],
         },
-        scopeMetrics: [{ scope: { name: "zentrixpay-mcp", version: "mcp" }, metrics: metricBodies }],
+        scopeMetrics: [
+          { scope: { name: "zentrixpay-mcp", version: "mcp" }, metrics: metricBodies },
+        ],
       },
     ],
   };

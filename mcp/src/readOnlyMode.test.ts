@@ -104,7 +104,6 @@ describe("readOnlyRefusalError", () => {
     // just fail twice.
     expect(message).toMatch(/no tool argument can override it/i);
   });
-
 });
 
 describe("formatReadOnlyDiagnostics", () => {
@@ -157,7 +156,11 @@ describe("read-only mode through the MCP server", () => {
 
   it("refuses every non-read-only tool, not just the spending ones", async () => {
     process.env[READ_ONLY_ENV_VAR] = "1";
-    for (const name of ["zentrixpay_reset", "zentrixpay_setup_wallet", "zentrixpay_restore_state"]) {
+    for (const name of [
+      "zentrixpay_reset",
+      "zentrixpay_setup_wallet",
+      "zentrixpay_restore_state",
+    ]) {
       await expect(dispatchTool(name, {}), name).rejects.toThrow(/Read-only mode/);
     }
   });

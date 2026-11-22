@@ -113,7 +113,6 @@ describe("resolvePaidConfirmationPolicy", () => {
 // ── Classification ───────────────────────────────────────────────────────────
 
 describe("paidOperationClass", () => {
-
   it("classifies the network-fee spenders", () => {
     for (const name of FEE_SPENDING_TOOLS) {
       expect(paidOperationClass(name), name).toBe("fee");
@@ -169,7 +168,6 @@ describe("requiresPaidConfirmation", () => {
       expect(requiresPaidConfirmation(name, "all"), name).toBe(true);
     }
   });
-
 });
 
 describe("assertPaidOperationConfirmed", () => {
@@ -224,5 +222,4 @@ describe("the paid-operation policy through the MCP server", () => {
       );
     }
   });
-
 });

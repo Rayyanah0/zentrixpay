@@ -66,9 +66,7 @@ const POLICIES: readonly PaidConfirmationPolicy[] = ["off", "usdc", "all"];
  * resource's asking price. Both settle on-chain and neither can be undone.
  * `zentrixpay_publish_batch` pays one verification fee per item in the batch.
  */
-export const USDC_SPENDING_TOOLS = [
-  "zentrixpay_call",
-] as const;
+export const USDC_SPENDING_TOOLS = ["zentrixpay_call"] as const;
 
 /**
  * Tools that submit a Stellar transaction and so spend network fees.
@@ -80,8 +78,7 @@ export const USDC_SPENDING_TOOLS = [
  * through the sponsored-account service, so the agent's own wallet funds
  * nothing.
  */
-export const FEE_SPENDING_TOOLS = [
-] as const;
+export const FEE_SPENDING_TOOLS = [] as const;
 
 /** What a tool spends, or `null` when it spends nothing. */
 export type PaidOperationClass = "usdc" | "fee";

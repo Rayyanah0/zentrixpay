@@ -67,7 +67,9 @@ describe("mainnet mutation policy (#606)", () => {
     // trimmed since before #606, and preserving that is part of the
     // behaviour-compatibility contract.
     for (const raw of ["1", "true", "yes", "TRUE", "Yes", "true ", "yes\n"]) {
-      expect(mainnetMutationPolicyFromEnv({ ZENTRIXPAY_ALLOW_MAINNET: raw }), raw).toBe("allow-all");
+      expect(mainnetMutationPolicyFromEnv({ ZENTRIXPAY_ALLOW_MAINNET: raw }), raw).toBe(
+        "allow-all",
+      );
     }
   });
 

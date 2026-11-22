@@ -76,9 +76,8 @@ async function buildApp(redisUrl?: string) {
     },
   }));
   const { default: router } = await import("./publishers.js");
-  const { getRateLimitStore, RedisSlidingWindowStore, MemorySlidingWindowStore } = await import(
-    "../lib/rateLimit/index.js"
-  );
+  const { getRateLimitStore, RedisSlidingWindowStore, MemorySlidingWindowStore } =
+    await import("../lib/rateLimit/index.js");
   const app = express();
   app.set("trust proxy", true);
   app.use(express.json());

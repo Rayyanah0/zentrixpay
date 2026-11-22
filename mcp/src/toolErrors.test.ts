@@ -84,7 +84,6 @@ afterEach(() => {
 });
 
 describe("network failure", () => {
-
   it("attributes a Horizon outage to Horizon, not the API", async () => {
     _setAgentWallet(testWallet);
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("ENOTFOUND horizon"));
@@ -93,7 +92,6 @@ describe("network failure", () => {
     expect(message).toContain("Source: Horizon");
     expect(message).toContain("Category: network");
   });
-
 });
 
 describe("Soroban RPC failures", () => {

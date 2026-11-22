@@ -158,7 +158,9 @@ describe("MCP integration harness", () => {
     expect(unknown.isError).toBe(true);
     // The message continues with the list of available tools, so anchor on the
     // name rather than the end of the line.
-    expect(harnessResultText(unknown)).toMatch(/^Error: Unknown tool: zentrixpay_not_a_real_tool\b/);
+    expect(harnessResultText(unknown)).toMatch(
+      /^Error: Unknown tool: zentrixpay_not_a_real_tool\b/,
+    );
 
     const walletInfo = await harness.callTool("zentrixpay_wallet_info");
     expect(walletInfo.isError).toBe(true);

@@ -13,25 +13,30 @@ import { publishers } from "../db/schema.js";
 const router: RouterType = Router();
 
 // POST /publishers — register a new publisher (public, IP rate-limited)
-router.post("/publishers", registerIpRateLimit, validate(publisherRegisterSchema), async (req, res) => {
-  try {
-    const { publisher, apiKey } = await registerPublisher(req.body);
-    res.status(201).json({
-      id: publisher.id,
-      name: publisher.name,
-      email: publisher.email,
-      walletAddress: publisher.walletAddress,
-      apiKey, // shown once — store it securely
-      createdAt: publisher.createdAt,
-    });
-  } catch (err: any) {
-    if (err.message?.includes("unique")) {
-      res.status(409).json({ error: "Email already registered" });
-      return;
+router.post(
+  "/publishers",
+  registerIpRateLimit,
+  validate(publisherRegisterSchema),
+  async (req, res) => {
+    try {
+      const { publisher, apiKey } = await registerPublisher(req.body);
+      res.status(201).json({
+        id: publisher.id,
+        name: publisher.name,
+        email: publisher.email,
+        walletAddress: publisher.walletAddress,
+        apiKey, // shown once — store it securely
+        createdAt: publisher.createdAt,
+      });
+    } catch (err: any) {
+      if (err.message?.includes("unique")) {
+        res.status(409).json({ error: "Email already registered" });
+        return;
+      }
+      throw err;
     }
-    throw err;
-  }
-});
+  },
+);
 
 // GET /publishers/wallet/:address — look up publisher by wallet (public)
 router.get("/publishers/wallet/:address", async (req, res) => {

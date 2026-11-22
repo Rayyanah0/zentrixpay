@@ -128,8 +128,13 @@ export function TryItModal({ api, wallet, onClose }: Props) {
     setSending(true);
     try {
       const response = await callApi(api.proxyUrl, {
-        signer: createFreighterSigner(createWalletSigner(wallet.address, "Test SDF Network ; September 2015")),
-        network: (import.meta.env.VITE_STELLAR_NETWORK === "public" || import.meta.env.VITE_STELLAR_NETWORK === "mainnet" ? "stellar:pubnet" : "stellar:testnet") as "stellar:testnet" | "stellar:pubnet",
+        signer: createFreighterSigner(
+          createWalletSigner(wallet.address, "Test SDF Network ; September 2015"),
+        ),
+        network: (import.meta.env.VITE_STELLAR_NETWORK === "public" ||
+        import.meta.env.VITE_STELLAR_NETWORK === "mainnet"
+          ? "stellar:pubnet"
+          : "stellar:testnet") as "stellar:testnet" | "stellar:pubnet",
         method,
         path,
         body: prepared.body,

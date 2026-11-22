@@ -35,9 +35,7 @@ function safely(fn: () => void): void {
 /** The stored key for this tab, falling back to a remembered one. */
 export function readProviderKey(): string {
   try {
-    return (
-      session()?.getItem(PROVIDER_KEY_STORAGE) ?? local()?.getItem(PROVIDER_KEY_STORAGE) ?? ""
-    );
+    return session()?.getItem(PROVIDER_KEY_STORAGE) ?? local()?.getItem(PROVIDER_KEY_STORAGE) ?? "";
   } catch {
     return "";
   }

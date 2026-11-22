@@ -39,7 +39,10 @@ function resolve(pointer: string): unknown {
   return pointer
     .replace(/^#\//, "")
     .split("/")
-    .reduce<unknown>((acc, key) => (acc as Record<string, unknown> | undefined)?.[key], openApiSpec);
+    .reduce<unknown>(
+      (acc, key) => (acc as Record<string, unknown> | undefined)?.[key],
+      openApiSpec,
+    );
 }
 
 describe("OpenAPI spec — pay-per-call routes (#138)", () => {

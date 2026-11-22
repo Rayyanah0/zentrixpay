@@ -4,6 +4,7 @@
     "subtitle": "APIs de pago por llamada. Una solicitud HTTP, un pago USDC en Stellar — sin cuentas, sin suscripciones.",
     "tab_browse": "Explorar APIs",
     "tab_provide": "Vender tu API",
+    "tab_access": "Mi acceso",
     "theme_light": "Claro",
     "theme_dark": "Oscuro",
     "theme_toggle_label": "Cambiar tema claro/oscuro",
@@ -123,5 +124,23 @@
   "language": {
     "switch_to": "English",
     "label": "Idioma"
+  },
+  "access": {
+    "heading": "Tus pases y créditos",
+    "connect_prompt": "Conecta tu billetera para ver los pases de acceso y créditos prepagados que tiene.",
+    "load": "Ver mis pases y créditos",
+    "refresh": "Actualizar",
+    "loading": "Esperando la firma de la billetera…",
+    "load_failed": "No se pudieron cargar tus pases y créditos.",
+    "passes_heading": "Pases activos",
+    "no_passes": "No hay pases activos.",
+    "expires_in_minutes_one": "Vence en {{count}} minuto",
+    "expires_in_minutes_other": "Vence en {{count}} minutos",
+    "expires_in_hours_one": "Vence en {{count}} hora",
+    "expires_in_hours_other": "Vence en {{count}} horas",
+    "credits_heading": "Créditos prepagados",
+    "no_credits": "No hay créditos prepagados.",
+    "credits_left_one": "Queda {{count}} llamada",
+    "credits_left_other": "Quedan {{count}} llamadas"
   }
 }

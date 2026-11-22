@@ -56,8 +56,7 @@ process.env.ZENTRIXPAY_HTTP_TIMEOUT_MS = "50";
 process.env.ZENTRIXPAY_HORIZON_TIMEOUT_MS = "50";
 process.env.ZENTRIXPAY_SOROBAN_TIMEOUT_MS = "50";
 
-const { txStatus, networkProfile, walletInfo, _setAgentWallet } =
-  await import("./index.js");
+const { txStatus, networkProfile, walletInfo, _setAgentWallet } = await import("./index.js");
 
 /** A fetch that never responds until the request is aborted. */
 function hangingFetch() {
@@ -78,7 +77,6 @@ afterEach(() => {
 });
 
 describe("outbound API calls carry a deadline", () => {
-
   it("applies the Horizon budget to balance lookups", async () => {
     _setAgentWallet({
       publicKey: "GTESTPUBLICKEY000000000000000000000000000000000000000000",
@@ -96,7 +94,6 @@ describe("outbound API calls carry a deadline", () => {
 
     await expect(txStatus("abc123")).rejects.toThrow(/timed out after 50ms \(soroban\)/);
   });
-
 });
 
 describe("network profile reports the active budgets", () => {

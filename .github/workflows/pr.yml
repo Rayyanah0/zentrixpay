@@ -64,6 +64,22 @@ jobs:
       - run: pnpm --filter @zentrixpay/mcp smoke:install
       - run: pnpm test
 
+  # Its own job so branch protection can list it as a required check (#293).
+  # Runs the attacker-style paywall suite and the route auth inventory (#294).
+  paywall-security:
+    name: Paywall security regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build:registry-client
+      - run: pnpm --filter @zentrixpay/server exec vitest run src/paywall.security.test.ts src/routes/routeAuthInventory.test.ts
+
   contract-ci:
     name: Contract formatting, lint, and tests
     runs-on: ubuntu-latest

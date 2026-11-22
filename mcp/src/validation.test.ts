@@ -239,7 +239,6 @@ describe.each(Object.keys(TOOL_ARGUMENT_SPECS))("%s", (tool) => {
 // ── 3. Semantics per argument kind ───────────────────────────────────────────
 
 describe("string arguments", () => {
-
   it("enforces minLength for passphrases", () => {
     const err = expectInvalid("zentrixpay_backup_state", { passphrase: "short" });
     expect(err.issues[0].code).toBe("too_short");

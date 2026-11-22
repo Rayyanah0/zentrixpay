@@ -101,7 +101,8 @@ const ACTION: Record<ErrorCategory, string> = {
   conflict: "The resource is already in the requested state — no action needed.",
   rate_limit: "Rate limited. Wait for the window to pass before retrying.",
   server: "The upstream service is failing. Retry shortly; if it persists the service is down.",
-  contract: "Verify the registry contract ID and network with zentrixpay_registry_info, then retry.",
+  contract:
+    "Verify the registry contract ID and network with zentrixpay_registry_info, then retry.",
   unknown: "Retry once; if it persists, report the summary above with the tool name.",
 };
 

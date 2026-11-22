@@ -115,7 +115,8 @@ export function payeeSignatureAuth(req: Request, res: Response, next: NextFuncti
     const messages: Record<string, string> = {
       invalid_timestamp: "X-Payee-Timestamp is not a valid unix timestamp",
       timestamp_expired: "X-Payee-Timestamp is outside the allowed clock-skew window",
-      invalid_signature_encoding: "X-Payee-Signature must be base64-encoded (64 bytes when decoded)",
+      invalid_signature_encoding:
+        "X-Payee-Signature must be base64-encoded (64 bytes when decoded)",
       invalid_public_key: "Current payee address is not a valid Stellar public key",
       signature_mismatch: "X-Payee-Signature is invalid for the current payee wallet",
     };

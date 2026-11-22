@@ -60,7 +60,6 @@ describe("parseToolTimeouts", () => {
 });
 
 describe("resolveToolTimeouts", () => {
-
   it("is empty when the variable is absent", () => {
     expect(resolveToolTimeouts({}).overrides).toEqual({});
   });
@@ -74,7 +73,6 @@ describe("timeoutForTool", () => {
 
     expect(timeoutForTool("zentrixpay_tx_status", "soroban", budgets, overrides)).toBe(90000);
   });
-
 });
 
 describe("unknownToolNames", () => {
@@ -95,5 +93,4 @@ describe("describeToolTimeouts", () => {
   it("says so when nothing is overridden", () => {
     expect(describeToolTimeouts({})).toContain("service budget");
   });
-
 });

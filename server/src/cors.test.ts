@@ -49,9 +49,7 @@ describe("createCorsOptions", () => {
     for (const header of X402_ALLOWED_HEADERS) {
       expect(allowed).toContain(header.toLowerCase());
     }
-    expect(response.headers["access-control-expose-headers"]).toContain(
-      X402_EXPOSED_HEADERS[0],
-    );
+    expect(response.headers["access-control-expose-headers"]).toContain(X402_EXPOSED_HEADERS[0]);
   });
 
   it("reflects requested headers only for API proxy paths", async () => {

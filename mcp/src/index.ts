@@ -489,10 +489,7 @@ export function mainnetBanner(): string {
   return [banner, "", formatPaidConfirmationDiagnostics()].join("\n");
 }
 
-const API_MUTATION_TOOLS = new Set([
-  "zentrixpay_register",
-  "zentrixpay_rotate_publisher_key",
-]);
+const API_MUTATION_TOOLS = new Set(["zentrixpay_register", "zentrixpay_rotate_publisher_key"]);
 
 async function assertApiReachableFor(toolName: string): Promise<void> {
   const dep = await checkDependency("ZentrixPay API", `${BASE_URL}/health`);
@@ -1781,8 +1778,7 @@ async function dispatchToolOutcome(
       ? (rawArgs as Record<string, unknown>)
       : {};
 
-  const isDryRunCall =
-    name === "zentrixpay_call" && rawRecord.dryRun === true;
+  const isDryRunCall = name === "zentrixpay_call" && rawRecord.dryRun === true;
 
   const args: ValidatedArgs =
     name in TOOL_ARGUMENT_SPECS && !isDryRunCall ? validateToolArgs(name, rawArgs) : {};
