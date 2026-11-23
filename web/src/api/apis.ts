@@ -222,7 +222,10 @@ function payoutsQuery(range: PayoutRange, format?: "csv"): string {
 }
 
 /** Charged revenue per payee wallet and API for a date window (`to` exclusive). */
-export async function fetchPayouts(apiKey: string, range: PayoutRange = {}): Promise<PayoutSummary> {
+export async function fetchPayouts(
+  apiKey: string,
+  range: PayoutRange = {},
+): Promise<PayoutSummary> {
   return readJson(
     await signedPublisherFetch(absolute(`/publishers/me/payouts${payoutsQuery(range)}`), apiKey),
   );
@@ -253,7 +256,11 @@ export async function downloadApiCallsCsv(
   apiId: string,
   range: PayoutRange = {},
 ): Promise<void> {
-  return downloadCsv(apiKey, `/apis/${encodeURIComponent(apiId)}/calls.csv${payoutsQuery(range)}`, `api-${apiId}-calls.csv`);
+  return downloadCsv(
+    apiKey,
+    `/apis/${encodeURIComponent(apiId)}/calls.csv${payoutsQuery(range)}`,
+    `api-${apiId}-calls.csv`,
+  );
 }
 
 export async function createApi(apiKey: string, input: ApiInput): Promise<OwnerApi> {
@@ -323,4 +330,123 @@ export async function fetchApiTimeSeries(
   return readJson(
     await signedPublisherFetch(absolute(`/apis/${id}/stats/time-series?days=${days}`), apiKey),
   );
+}
+
+// ── OpenAPI helpers (#182) ───────────────────────────────────────────────────
+
+/** Minimal shape of an OpenAPI 3 document — only what the endpoint list reads. */
+export interface OpenApiSpec {
+  openapi?: string;
+  paths?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface ApiEndpointParameter {
+  name: string;
+  in: string;
+  required: boolean;
+  description: string | null;
+}
+
+/** One operation from an API's OpenAPI document, as shown in the detail view. */
+export interface ApiEndpoint {
+  method: HttpMethod;
+  path: string;
+  summary: string | null;
+  parameters: ApiEndpointParameter[];
+  hasRequestBody: boolean;
+}
+
+/**
+ * Fetch an API's OpenAPI document from `GET /apis/:id/openapi.json`.
+ * Accepts the API id, or the absolute `openapiUrl` the catalog returns.
+ */
+export async function fetchOpenApiSpec(
+  idOrUrl: string,
+  signal?: AbortSignal,
+): Promise<OpenApiSpec> {
+  const url = /^https?:\/\//i.test(idOrUrl)
+    ? idOrUrl
+    : absolute(`/apis/${encodeURIComponent(idOrUrl)}/openapi.json`);
+  return readJson(await fetch(url, { signal }));
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/** Resolve a local `#/components/...` reference; anything else is returned as-is. */
+function deref(spec: OpenApiSpec, value: unknown): Record<string, unknown> | null {
+  const node = asRecord(value);
+  const ref = node && typeof node.$ref === "string" ? node.$ref : null;
+  if (!ref) return node;
+  if (!ref.startsWith("#/")) return null;
+  let current: unknown = spec;
+  for (const raw of ref.slice(2).split("/")) {
+    const key = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+    current = asRecord(current)?.[key];
+  }
+  return asRecord(current);
+}
+
+function parametersOf(spec: OpenApiSpec, list: unknown): ApiEndpointParameter[] {
+  if (!Array.isArray(list)) return [];
+  const out: ApiEndpointParameter[] = [];
+  for (const item of list) {
+    const param = deref(spec, item);
+    const name = nonEmptyString(param?.name);
+    const location = nonEmptyString(param?.in);
+    if (!param || !name || !location) continue;
+    out.push({
+      name,
+      in: location,
+      required: param.required === true || location === "path",
+      description: nonEmptyString(param.description),
+    });
+  }
+  return out;
+}
+
+/**
+ * List the operations in an OpenAPI document: method, path and summary, plus
+ * parameters and whether a body is accepted. Path-level parameters are merged
+ * into each operation (an operation's own parameter with the same name and
+ * location wins). Unknown methods and malformed entries are skipped. Paths
+ * keep the document's order; methods within a path follow HTTP_METHODS.
+ */
+export function endpointsFromSpec(spec: OpenApiSpec | null | undefined): ApiEndpoint[] {
+  const paths = asRecord(spec?.paths);
+  if (!spec || !paths) return [];
+
+  const endpoints: ApiEndpoint[] = [];
+  for (const [path, rawItem] of Object.entries(paths)) {
+    const item = deref(spec, rawItem);
+    if (!item) continue;
+    const shared = parametersOf(spec, item.parameters);
+
+    for (const method of HTTP_METHODS) {
+      const operation = deref(spec, item[method.toLowerCase()]);
+      if (!operation) continue;
+
+      const own = parametersOf(spec, operation.parameters);
+      const ownKeys = new Set(own.map((p) => `${p.in}:${p.name}`));
+      const parameters = [...shared.filter((p) => !ownKeys.has(`${p.in}:${p.name}`)), ...own];
+
+      endpoints.push({
+        method,
+        path,
+        summary: nonEmptyString(operation.summary) ?? nonEmptyString(operation.description),
+        parameters,
+        hasRequestBody: deref(spec, operation.requestBody) !== null,
+      });
+    }
+  }
+
+  return endpoints;
 }

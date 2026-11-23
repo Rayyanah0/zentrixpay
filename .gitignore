@@ -50,3 +50,6 @@ packages/registry-client/vitest.config.d.ts.map
 
 # npm lock file (project uses pnpm)
 package-lock.json
+
+# Vitest JSON reports written in CI (#188)
+vitest-report.json

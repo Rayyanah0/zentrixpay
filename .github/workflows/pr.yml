@@ -44,12 +44,23 @@ jobs:
       - run: pnpm --filter @zentrixpay/server build
       - run: node server/scripts/check-migrations.mjs
         name: Check migration numbering and journal
-      - run: pnpm --filter @zentrixpay/server test
+      # The JSON report feeds the "every test file ran" check below (#188).
+      - run: pnpm --filter @zentrixpay/server exec vitest run --reporter=default --reporter=json --outputFile.json=vitest-report.json
+        name: Server tests
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # A test file that throws on import shows up only as "(0 test)" among
+      # the failures. Name each one explicitly, even when other tests failed.
+      - run: node scripts/check-test-files-ran.mjs server/vitest-report.json
+        name: Check every server test file ran at least one test
+        if: ${{ !cancelled() }}
       - run: pnpm --filter @zentrixpay/web typecheck
       - run: pnpm --filter @zentrixpay/web build
-      - run: pnpm --filter @zentrixpay/web test
+      - run: pnpm --filter @zentrixpay/web exec vitest run --reporter=default --reporter=json --outputFile.json=vitest-report.json
+        name: Web tests
+      - run: node scripts/check-test-files-ran.mjs web/vitest-report.json
+        name: Check every web test file ran at least one test
+        if: ${{ !cancelled() }}
       - run: pnpm --filter @zentrixpay/mcp typecheck
       - run: pnpm --filter @zentrixpay/mcp test
       - run: pnpm --filter @zentrixpay/registry-client typecheck
@@ -66,6 +77,101 @@ jobs:
       - run: pnpm --filter @zentrixpay/mcp check-tool-docs
       - run: pnpm --filter @zentrixpay/mcp smoke:install
       - run: pnpm test
+
+  # Type checks and unit tests don't prove the server starts (#187): build it,
+  # migrate a real Postgres, boot `node dist/index.js` with a minimal env and
+  # hit /health and /apis. Fails if the process exits, never listens, or
+  # either endpoint returns a non-2xx status.
+  server-boot:
+    name: Server boots and serves /health and /apis
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: zentrixpay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/zentrixpay
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build:registry-client
+      - run: pnpm --filter @zentrixpay/server build
+      - run: pnpm --filter @zentrixpay/server db:migrate
+        name: Apply migrations
+      - name: Start the built server and probe it
+        working-directory: server
+        env:
+          NODE_ENV: production
+          PORT: "4021"
+          BASE_URL: http://localhost:4021
+          STELLAR_NETWORK: testnet
+          NETWORK: stellar:testnet
+          SOROBAN_RPC_URL: https://soroban-testnet.stellar.org
+          USDC_CONTRACT_ID: CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA
+          REGISTRY_CONTRACT_ID: CDQKUIADLO5S5WEHEUTTXX2M45WAHVRU2PBEBD6ZGDKMOP5A72FJ3OD4
+          # No background workers: they reach out to the network and are not
+          # what this job is checking.
+          RUN_BACKGROUND_WORKERS: "false"
+          READINESS_REQUIRE_FACILITATOR: "false"
+        run: |
+          set -euo pipefail
+          # Throwaway keypair: the registry client parses it at import time.
+          REGISTRY_SECRET_KEY="$(node --input-type=module -e "import { Keypair } from '@stellar/stellar-sdk'; console.log(Keypair.random().secret())")"
+          export REGISTRY_SECRET_KEY
+
+          node dist/index.js > server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          fail() {
+            echo "::error::$1"
+            echo "----- server log -----"
+            cat server.log
+            exit 1
+          }
+
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              fail "server process exited during startup"
+            fi
+            if curl -fsS -o /dev/null http://localhost:4021/health; then
+              break
+            fi
+            sleep 1
+          done
+
+          probe() {
+            local path="$1" status
+            status="$(curl -sS -o response.json -w '%{http_code}' "http://localhost:4021${path}" || echo 000)"
+            echo "GET ${path} -> ${status}"
+            head -c 500 response.json 2>/dev/null || true
+            echo
+            if [ "${status}" -lt 200 ] || [ "${status}" -ge 300 ]; then
+              fail "GET ${path} returned HTTP ${status}"
+            fi
+          }
+
+          probe /health
+          probe /apis
+
+          if ! kill -0 "$server_pid" 2>/dev/null; then
+            fail "server process exited after serving requests"
+          fi
+          echo "Server booted and served /health and /apis."
 
   # Its own job so branch protection can list it as a required check (#293).
   # Runs the attacker-style paywall suite and the route auth inventory (#294).
