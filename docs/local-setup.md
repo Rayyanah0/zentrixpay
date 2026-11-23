@@ -38,6 +38,19 @@ Run the migrations:
 make migrate
 ```
 
+Then load a demo publisher and four listed APIs that point at the local mock
+upstream, so the catalog is populated and callable straight away:
+
+```bash
+pnpm mock-upstream   # serves /echo, /slow, /large and /error on :8787 (leave it running)
+pnpm seed            # idempotent; re-run any time
+```
+
+The seeded APIs proxy to `127.0.0.1`, so also set
+`PROXY_ALLOW_PRIVATE_UPSTREAMS=true` in `server/.env`. The demo publisher's API
+key is `zp_dev_seed_key` (override with `SEED_PUBLISHER_API_KEY`); set
+`SEED_WALLET_ADDRESS` to receive test payments in your own wallet.
+
 ## 5. Run
 
 Start the server (`:4021`) and the web app (`:5173`):

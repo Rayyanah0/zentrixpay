@@ -11,6 +11,7 @@ existed, these decisions were only written down in PR threads.
 | [0003](0003-cuid2-identifiers.md)          | Use cuid2 strings as primary keys                             | Accepted |
 | [0004](0004-encrypted-upstream-secrets.md) | Encrypt providers' upstream secrets with AES-256-GCM          | Accepted |
 | [0005](0005-ownership-proof-well-known.md) | Prove upstream ownership with a `/.well-known` file           | Accepted |
+| [0006](0006-slim-api-registry-contract.md) | Anchor API prices in a slim `api-registry` contract           | Proposed |
 
 Older ADRs from the MindVault vault (fee config, refund escrow, leases, tag
 index repair) are still in [`docs/`](../) as `adr-*.md`.
