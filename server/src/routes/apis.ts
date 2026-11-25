@@ -94,6 +94,7 @@ import { config, upstreamKeyRing } from "../config.js";
 import { ProxyBufferSemaphore, proxyBufferConcurrency } from "../middleware/proxyBuffer.js";
 import { importBulkOpenApi, previewBulkOpenApi } from "../services/openApiImport.js";
 import { OpenApiSpecTooLargeError } from "../services/openApiSpec.js";
+import { proxyTrackingMiddleware } from "../middleware/proxyTracking.js";
 
 const router = Router();
 const openApiUpload = multer({ limits: { fileSize: 512 * 1024, files: 1 } });
@@ -933,6 +934,7 @@ router.post("/api/:id/pass", loadProxiedApi, async (req: Request, res: Response)
 // ANY /api/:id[/*path] — one paid call to the provider's API
 router.all(
   "/api/:id{/*path}",
+  proxyTrackingMiddleware,
   proxyIpRateLimit,
   proxyBufferLimit,
   loadProxiedApi,
