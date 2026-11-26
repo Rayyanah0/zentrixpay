@@ -95,6 +95,8 @@ import {
 import { config, upstreamKeyRing } from "../config.js";
 import { ProxyBufferSemaphore, proxyBufferConcurrency } from "../middleware/proxyBuffer.js";
 import { importBulkOpenApi, previewBulkOpenApi } from "../services/openApiImport.js";
+import { OpenApiSpecTooLargeError } from "../services/openApiSpec.js";
+import { proxyTrackingMiddleware } from "../middleware/proxyTracking.js";
 
 const router = Router();
 const openApiUpload = multer({ limits: { fileSize: 512 * 1024, files: 1 } });
@@ -131,8 +133,9 @@ router.post(
       return;
     }
     const result = previewBulkOpenApi(raw);
+    // Issue #214: oversized documents are 413; other validation failures stay 422.
     res
-      .status(result.errors.length > 0 ? 422 : 200)
+      .status(result.tooLarge ? 413 : result.errors.length > 0 ? 422 : 200)
       .json({ groups: result.groups, errors: result.errors });
   },
 );
@@ -158,7 +161,7 @@ router.post("/apis/import", apiKeyAuth, openApiUpload.single("document"), async 
     res.status(201).json(result);
   } catch (error) {
     res
-      .status(422)
+      .status(error instanceof OpenApiSpecTooLargeError ? 413 : 422)
       .json({ error: error instanceof Error ? error.message : "OpenAPI import failed" });
   }
 });
@@ -1062,6 +1065,7 @@ router.post("/api/:id/pass", loadProxiedApi, async (req: Request, res: Response)
 // ANY /api/:id[/*path] — one paid call to the provider's API
 router.all(
   "/api/:id{/*path}",
+  proxyTrackingMiddleware,
   proxyIpRateLimit,
   proxyBufferLimit,
   loadProxiedApi,
