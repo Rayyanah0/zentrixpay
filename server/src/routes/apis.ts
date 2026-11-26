@@ -432,56 +432,6 @@ function decodeQueryPart(part: string): string {
   return {};
 }
 
-/**
- * Resolve the payer address for a charged call.
- * Prefer the verified settlement payer from the PAYMENT-RESPONSE header,
- * then fall back to parsing the PAYMENT-SIGNATURE payload.
- */
-function resolvePayer(req: Request, res: Response): string {
-  const settlement = settlementFrom(res);
-  if (settlement.payer && settlement.payer !== "unknown") {
-    return settlement.payer;
-  }
-  const signature = req.get("PAYMENT-SIGNATURE") || req.get("X-PAYMENT") || undefined;
-  const parsed = parsePayerFromXPayment(signature);
-  return parsed || "unknown";
-}
-
-/**
- * Proxy finish handler: records the completed call.
- * Called after the upstream provider responds.
- */
-export async function finishHandler(req: Request, res: Response) {
-  const apiId = req.params.id;
-  const startedAt: number = (req as any).callStartedAt ?? Date.now();
-  const statusCode = res.statusCode;
-  const charged = Boolean((req as any).callCharged);
-  const latencyMs = Date.now() - startedAt;
-
-  let payerAddress: string | null = null;
-  let settlementTx: string | null = null;
-
-  if (charged) {
-    payerAddress = resolvePayer(req, res);
-    const settlement = settlementFrom(res);
-    settlementTx = settlement.transaction ?? null;
-  }
-
-  try {
-    await db.insert(apiCalls).values({
-      apiId,
-      statusCode,
-      latencyMs,
-      charged,
-      payerAddress,
-      settlementTx,
-      createdAt: new Date(),
-    });
-  } catch (err) {
-    console.error("Failed to record api call", err);
-  }
-}
-
 const UPSTREAM_ERROR_STATUS = { blocked: 502, network: 502, too_large: 502, timeout: 504 } as const;
 
 /** Build and inject upstream secrets into headers/url, returning the secrets manifest. */
@@ -553,6 +503,7 @@ async function proxyHandler(req: Request, res: Response) {
       amount,
       method: req.method,
       path,
+      txHash: settlement.transaction ?? null,
       responseStatus: res.statusCode,
       durationMs,
       // Charged-call webhook goes to the outbox in the same transaction (#208).
